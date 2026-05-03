@@ -1,0 +1,305 @@
+[gd_scene load_steps=9 format=3 uid="uid://di8s4oahhme5"]
+
+[ext_resource type="Script" uid="uid://bednyshjiftkh" path="res://main.gd" id="1_1bvp3"]
+[ext_resource type="Texture2D" uid="uid://b843slb3i1pcu" path="res://player_classes/dwarf_novice.png" id="2_7mycd"]
+[ext_resource type="Script" uid="uid://m857kj34pbya" path="res://player.gd" id="2_h2yge"]
+[ext_resource type="Script" uid="uid://t1pr0as8p8mt" path="res://enemy.gd" id="3_h2yge"]
+[ext_resource type="FontFile" uid="uid://c1k21tdit3e3h" path="res://MedievalSharp-Bold.ttf" id="5_lquwl"]
+[ext_resource type="Texture2D" uid="uid://ihibyfbpnyik" path="res://ikony/HpBottleIcon.png" id="6_7mycd"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_lquwl"]
+bg_color = Color(0.8985114, 0, 0.2924933, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7mycd"]
+bg_color = Color(0.18717611, 0.18717617, 0.18717602, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+corner_detail = 6
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_1bvp3")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(3, 3)
+
+[node name="Player" type="Sprite2D" parent="."]
+position = Vector2(-336, -9.000002)
+scale = Vector2(0.5069275, 0.5069275)
+texture = ExtResource("2_7mycd")
+script = ExtResource("2_h2yge")
+
+[node name="Enemy" type="Node2D" parent="."]
+position = Vector2(288, 4)
+script = ExtResource("3_h2yge")
+
+[node name="Sprite2D" type="Sprite2D" parent="Enemy"]
+position = Vector2(36, -4)
+scale = Vector2(0.4865723, 0.4865723)
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="UIRoot" type="Control" parent="CanvasLayer"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_right = 128.0
+offset_bottom = 72.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Left" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 20.0
+offset_top = 20.0
+offset_right = 250.0
+offset_bottom = 120.0
+
+[node name="LabelPlayer" type="Label" parent="CanvasLayer/UIRoot/Left"]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 23.0
+theme_override_fonts/font = ExtResource("5_lquwl")
+
+[node name="PlayerHPBar" type="ProgressBar" parent="CanvasLayer/UIRoot/Left"]
+layout_mode = 1
+offset_left = 183.0
+offset_top = 548.0
+offset_right = 403.0
+offset_bottom = 574.0
+theme_override_styles/fill = SubResource("StyleBoxFlat_lquwl")
+value = 100.0
+show_percentage = false
+
+[node name="XPBar" type="ProgressBar" parent="CanvasLayer/UIRoot/Left"]
+layout_mode = 1
+offset_left = 183.0
+offset_top = 580.0
+offset_right = 403.0
+offset_bottom = 607.0
+theme_override_fonts/font = ExtResource("5_lquwl")
+
+[node name="LevelLabel" type="Label" parent="CanvasLayer/UIRoot/Left"]
+layout_mode = 0
+offset_left = 185.0
+offset_top = 609.0
+offset_right = 227.0
+offset_bottom = 632.0
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_constants/shadow_outline_size = 12
+theme_override_fonts/font = ExtResource("5_lquwl")
+theme_override_font_sizes/font_size = 18
+text = "LVL 1"
+horizontal_alignment = 2
+
+[node name="StatsButton" type="Button" parent="CanvasLayer/UIRoot/Left"]
+visible = false
+custom_minimum_size = Vector2(80, 24)
+layout_mode = 1
+offset_left = 320.0
+offset_top = 590.0
+offset_right = 400.00003
+offset_bottom = 621.0
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "Stats"
+
+[node name="PotionsUI" type="HBoxContainer" parent="CanvasLayer/UIRoot/Left"]
+layout_mode = 1
+offset_top = 50.0
+offset_right = 1059.0
+offset_bottom = 1074.0
+scale = Vector2(0.05, 0.05)
+
+[node name="PotionIcon" type="TextureRect" parent="CanvasLayer/UIRoot/Left/PotionsUI"]
+layout_mode = 2
+texture = ExtResource("6_7mycd")
+
+[node name="PotionLabel" type="Label" parent="CanvasLayer/UIRoot/Left/PotionsUI"]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_lquwl")
+theme_override_font_sizes/font_size = 636
+text = "0/3"
+
+[node name="Right" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -270.0
+offset_top = 20.0
+offset_right = -20.0
+offset_bottom = 120.0
+grow_horizontal = 0
+
+[node name="LabelEnemy" type="Label" parent="CanvasLayer/UIRoot/Right"]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 23.0
+theme_override_fonts/font = ExtResource("5_lquwl")
+
+[node name="EnemyHPBar" type="ProgressBar" parent="CanvasLayer/UIRoot/Right"]
+layout_mode = 1
+offset_left = -311.0
+offset_top = 548.0
+offset_right = -37.48001
+offset_bottom = 574.0
+theme_override_styles/fill = SubResource("StyleBoxFlat_lquwl")
+value = 100.0
+show_percentage = false
+
+[node name="Bottom" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -300.0
+offset_right = 20.0
+offset_bottom = -20.0
+grow_horizontal = 2
+grow_vertical = 0
+tooltip_text = "Zadaj atak ("
+
+[node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UIRoot/Bottom"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="AttackButton" type="Button" parent="CanvasLayer/UIRoot/Bottom/HBoxContainer"]
+layout_mode = 2
+text = "Attack"
+
+[node name="CombatLog" type="Label" parent="CanvasLayer/UIRoot/Bottom/HBoxContainer"]
+custom_minimum_size = Vector2(300, 60)
+layout_mode = 2
+size_flags_horizontal = 3
+autowrap_mode = 3
+
+[node name="NextEnemyDialog" type="AcceptDialog" parent="CanvasLayer/UIRoot"]
+disable_3d = true
+oversampling_override = 1.0
+mode = 3
+title = "New opponent!"
+initial_position = 1
+ok_button_text = "OK"
+
+[node name="FXRoot" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="StatsPanel" type="PanelContainer" parent="CanvasLayer/UIRoot"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -20.0
+offset_top = -20.0
+offset_right = 20.0
+offset_bottom = 20.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_7mycd")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="LblStatsHeader" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
+custom_minimum_size = Vector2(380, 28)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "Stats"
+horizontal_alignment = 1
+
+[node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="LblStr" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer"]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "STR: 1"
+horizontal_alignment = 3
+
+[node name="BtnStrPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 8
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "+"
+
+[node name="HBoxContainer2" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="LblAgi" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2"]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "AGI: 1"
+horizontal_alignment = 3
+
+[node name="BtnAgiPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2"]
+layout_mode = 2
+size_flags_horizontal = 8
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "+"
+
+[node name="HBoxContainer3" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="LblVit" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3"]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "VIT: 1"
+horizontal_alignment = 3
+
+[node name="BtnVitPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3"]
+layout_mode = 2
+size_flags_horizontal = 8
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "+"
+
+[node name="HBoxContainer4" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="LblCrit" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4"]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "CRIT: 1"
+horizontal_alignment = 3
+
+[node name="BtnCritPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4"]
+layout_mode = 2
+size_flags_horizontal = 8
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "+"
+
+[node name="LblPoints" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "Unspent points: 0"
+horizontal_alignment = 1
+
+[node name="BtnClose" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("5_lquwl")
+text = "Close"
+
+[node name="DungeonChoiceDialog" type="ConfirmationDialog" parent="CanvasLayer/UIRoot"]
+title = "Dungeon Cleared!"
+ok_button_text = "Go to next dungeon"
+cancel_button_text = "Stay here"

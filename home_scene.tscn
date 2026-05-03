@@ -1,0 +1,83 @@
+[gd_scene load_steps=5 format=3 uid="uid://dkaa4mlqlqrcx"]
+
+[ext_resource type="Script" uid="uid://nk17bsqqvlon" path="res://home_scene.gd" id="1_bks2k"]
+[ext_resource type="Texture2D" uid="uid://bs560strnp6om" path="res://backgrounds/home.png" id="2_moc6q"]
+[ext_resource type="Script" uid="uid://m857kj34pbya" path="res://player.gd" id="2_vlpdr"]
+[ext_resource type="Texture2D" uid="uid://bs6n4pvxhl4sy" path="res://player_classes/dwarf_chill.png" id="3_bks2k"]
+
+[node name="HomeScene" type="Node2D"]
+script = ExtResource("1_bks2k")
+
+[node name="Background" type="Sprite2D" parent="."]
+position = Vector2(640, 360)
+texture = ExtResource("2_moc6q")
+
+[node name="Player" type="Sprite2D" parent="."]
+position = Vector2(-336, -9.000002)
+scale = Vector2(0.5069275, 0.5069275)
+texture = ExtResource("3_bks2k")
+script = ExtResource("2_vlpdr")
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="UI" type="Control" parent="CanvasLayer"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="StartRunButton" type="Button" parent="CanvasLayer/UI"]
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = 423.5
+offset_top = 656.0
+offset_right = 623.5
+offset_bottom = 706.0
+grow_horizontal = 2
+text = "Start Run"
+
+[node name="ChestButton" type="Button" parent="CanvasLayer/UI"]
+custom_minimum_size = Vector2(200, 50)
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -100.0
+offset_top = 656.0
+offset_right = 100.0
+offset_bottom = 706.0
+grow_horizontal = 2
+text = "Chest"
+
+[node name="SaveBtn" type="Button" parent="CanvasLayer/UI"]
+custom_minimum_size = Vector2(200, 50)
+layout_mode = 0
+offset_left = 8.0
+offset_top = 11.0
+offset_right = 208.0
+offset_bottom = 61.0
+text = "Save (slot 1)"
+
+[node name="LoadBtn" type="Button" parent="CanvasLayer/UI"]
+custom_minimum_size = Vector2(200, 50)
+layout_mode = 0
+offset_left = 1072.0
+offset_top = 8.0
+offset_right = 1272.0
+offset_bottom = 58.0
+text = "Load (Slot 1)"
+
+[node name="ExitBtn" type="Button" parent="CanvasLayer/UI"]
+custom_minimum_size = Vector2(200, 50)
+layout_mode = 0
+offset_left = 8.0
+offset_top = 656.0
+offset_right = 208.0
+offset_bottom = 706.0
+text = "Exit"

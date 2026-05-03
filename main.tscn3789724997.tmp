@@ -1,0 +1,110 @@
+[gd_scene load_steps=6 format=3 uid="uid://di8s4oahhme5"]
+
+[ext_resource type="Script" uid="uid://bednyshjiftkh" path="res://main.gd" id="1_1bvp3"]
+[ext_resource type="Texture2D" uid="uid://cv5mkwbsdgmyq" path="res://player2.png" id="1_ig7tw"]
+[ext_resource type="Texture2D" uid="uid://bcvc5mcpi4bmx" path="res://gobliny/Goblin1.png" id="2_0xm2m"]
+[ext_resource type="Script" uid="uid://m857kj34pbya" path="res://player.gd" id="2_h2yge"]
+[ext_resource type="Script" uid="uid://t1pr0as8p8mt" path="res://enemy.gd" id="3_h2yge"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_1bvp3")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(3, 3)
+
+[node name="Player" type="Sprite2D" parent="."]
+position = Vector2(-259.99994, -1.999939)
+scale = Vector2(0.40698242, 0.40698242)
+texture = ExtResource("1_ig7tw")
+script = ExtResource("2_h2yge")
+
+[node name="Enemy" type="Node2D" parent="."]
+position = Vector2(288, 4)
+script = ExtResource("3_h2yge")
+
+[node name="Sprite2D" type="Sprite2D" parent="Enemy"]
+position = Vector2(-20, -18)
+scale = Vector2(0.39453125, 0.39453125)
+texture = ExtResource("2_0xm2m")
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="UIRoot" type="Control" parent="CanvasLayer"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_right = 128.0
+offset_bottom = 72.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Left" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 20.0
+offset_top = 20.0
+offset_right = 250.0
+offset_bottom = 120.0
+
+[node name="LabelPlayer" type="Label" parent="CanvasLayer/UIRoot/Left"]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 23.0
+
+[node name="Right" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -270.0
+offset_top = 20.0
+offset_right = -20.0
+offset_bottom = 120.0
+grow_horizontal = 0
+
+[node name="LabelEnemy" type="Label" parent="CanvasLayer/UIRoot/Right"]
+layout_mode = 0
+offset_right = 40.0
+offset_bottom = 23.0
+
+[node name="Bottom" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -300.0
+offset_right = 20.0
+offset_bottom = -20.0
+grow_horizontal = 2
+grow_vertical = 0
+tooltip_text = "Zadaj atak ("
+
+[node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UIRoot/Bottom"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="AttackButton" type="Button" parent="CanvasLayer/UIRoot/Bottom/HBoxContainer"]
+layout_mode = 2
+text = "Attack"
+
+[node name="CombatLog" type="Label" parent="CanvasLayer/UIRoot/Bottom/HBoxContainer"]
+custom_minimum_size = Vector2(300, 60)
+layout_mode = 2
+size_flags_horizontal = 3
+autowrap_mode = 3
+
+[node name="NextEnemyDialog" type="AcceptDialog" parent="CanvasLayer/UIRoot"]
+disable_3d = true
+oversampling_override = 1.0
+mode = 3
+title = "Nowy przeciwnik!"
+initial_position = 1
+visible = true
+ok_button_text = "OK"

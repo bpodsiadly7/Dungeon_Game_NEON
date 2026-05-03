@@ -1,0 +1,4404 @@
+extends Node2D
+
+# --- UI odwołania ---
+@onready var lbl_player   := $CanvasLayer/UIRoot/Left/LabelPlayer
+@onready var lbl_enemy    := $CanvasLayer/UIRoot/Right/LabelEnemy
+@onready var btn_attack   := $CanvasLayer/UIRoot/Bottom/HBoxContainer/AttackButton
+@onready var lbl_log      := $CanvasLayer/UIRoot/Bottom/HBoxContainer/CombatLog
+@onready var next_dialog: AcceptDialog = get_node_or_null("CanvasLayer/UIRoot/NextEnemyDialog")
+@onready var cam: Camera2D = $Camera2D
+@onready var fx_root: Control = $CanvasLayer/UIRoot/FXRoot
+@onready var player_hp_bar: ProgressBar = $CanvasLayer/UIRoot/Left/PlayerHPBar
+@onready var enemy_hp_bar: ProgressBar = $CanvasLayer/UIRoot/Right/EnemyHPBar
+@onready var xp_bar: ProgressBar = $CanvasLayer/UIRoot/Left/XPBar
+@onready var lbl_level: Label = $CanvasLayer/UIRoot/Left/LevelLabel
+
+# --- Stats panel refs ---
+@onready var btn_stats: Button = $CanvasLayer/UIRoot/Left/StatsButton
+@onready var stats_panel: PanelContainer = $CanvasLayer/UIRoot/StatsPanel
+@onready var lbl_stats_header: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/LblStatsHeader
+@onready var lbl_str: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer/LblStr
+@onready var btn_str_plus: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer/BtnStrPlus
+@onready var lbl_agi: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2/LblAgi
+@onready var btn_agi_plus: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2/BtnAgiPlus
+@onready var lbl_vit: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3/LblVit
+@onready var btn_vit_plus: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3/BtnVitPlus
+@onready var lbl_crit: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4/LblCrit
+@onready var btn_crit_plus: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4/BtnCritPlus
+@onready var lbl_points: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/LblPoints
+@onready var btn_stats_close: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/BtnClose
+
+
+var home_overlay: ColorRect
+
+var is_in_home: bool = false
+
+
+# --- Potions UI ---
+@onready var potions_ui: HBoxContainer = $CanvasLayer/UIRoot/Left/PotionsUI
+@onready var potion_icon: TextureRect = $CanvasLayer/UIRoot/Left/PotionsUI/PotionIcon
+@onready var potion_label: Label = $CanvasLayer/UIRoot/Left/PotionsUI/PotionLabel
+@onready var btn_use_potion: Button = get_node_or_null("CanvasLayer/UIRoot/Bottom/HBoxContainer/UsePotionButton")
+
+# --- Boss choice dialog ---
+@onready var dungeon_choice: ConfirmationDialog = get_node_or_null("CanvasLayer/UIRoot/DungeonChoiceDialog")
+
+var next_enemy_data: Dictionary = {}
+var DMG_FONT: FontFile = preload("res://MedievalSharp-Bold.ttf")
+
+enum Turn { PLAYER, ENEMY }
+var turn: Turn = Turn.PLAYER
+var enemy_turn_delay: float = 0.6
+
+var current_enemy_data: Dictionary = {}
+var resolving_turn: bool = false
+
+var _heal_particles: GPUParticles2D
+
+# --- Postacie ---
+@onready var player := $Player
+@onready var enemy  := $Enemy
+
+# --- Ewolucja Krasnoluda ---
+const EVOLVE_LEVEL := 10  # ← do testów; docelowo 10
+var has_evolved: bool = false
+var chosen_class: String = ""  # "warrior" / "assassin" / "guardian" / "barbarian"
+
+const CLASS_TEXTURES := {
+	"warrior":   "res://player_classes/dwarf_warrior.png",
+	"assassin":  "res://player_classes/dwarf_assasin.png",
+	"guardian":  "res://player_classes/dwarf_guardian.png",
+	"barbarian": "res://player_classes/dwarf_barbarian.png",
+}
+
+# --- SKILLS ---
+const SKILL_COOLDOWN_TURNS := 10
+
+# slot->skill dict (na start tylko slot 1 = Power Strike)
+var skills: Dictionary = {}
+# slot->pozostałe tury cooldownu
+var skill_cooldowns: Dictionary = {}
+
+# Flagi/parametry pod przyszłe klasy (pasywki)
+var shield_active: bool = false                 # Guardian active: blok 100% next hit
+var passive_dodge_chance: float = 0.0           # Assassin passive
+var passive_dr_bonus: float = 0.0               # Guardian passive
+var bloodlust_lifesteal: float = 0.0            # Barbarian passive (ułamek leczenia z crita)
+
+# --- proste UI umiejętności ---
+var skills_panel: PanelContainer
+var lbl_skill1: Button
+var lbl_skill2: Button
+var skills_passive_label: Label
+
+var lbl_dungeon_name: Label
+
+# --- SKILL ICONS MAP ---
+const SKILL_ICONS: Dictionary = {
+	"Basic strike": "res://ikony/basic_strike.png",
+	"Power Strike": "res://ikony/power_strike.png",
+	"Quick Slash":  "res://ikony/quick_slash.png",
+	"Shield Block": "res://ikony/shield_block.png",
+	"Fury":         "res://ikony/fury.png",
+}
+
+# przechowamy referencję do tła, żeby nie dodać go drugi raz
+var _skills_bg: TextureRect = null
+
+func _skill_icon_for(skill_name: String) -> Texture2D:
+	if skill_name == "":
+		return null
+	if SKILL_ICONS.has(skill_name):
+		var t1 = load(String(SKILL_ICONS[skill_name]))
+		if t1 is Texture2D: return t1
+	# fallback: res://ikony/<nazwa_mala_z_podkreslnikami>.png
+	var guess := "res://ikony/%s.png" % skill_name.to_lower().replace(" ", "_")
+	if ResourceLoader.exists(guess):
+		var t2 = load(guess)
+		if t2 is Texture2D: return t2
+	return null
+
+func _skill_name_from_label(text: String) -> String:
+	# Zamienia "[1] Quick Slash" -> "Quick Slash"
+	var idx := text.find("] ")
+	if idx >= 0 and idx + 2 < text.length():
+		return text.substr(idx + 2, text.length() - (idx + 2)).strip_edges()
+	return text.strip_edges()
+
+
+# --- Parametry walki ---
+const HIT_DC := 11
+const CRIT := 20
+const CRIT_MULT := 2.0
+
+# --- Skalowanie obrażeń i kryta ---
+const STR_DMG_PER_POINT := 0.04
+const AGI_DMG_PER_POINT := 0.03
+const CRIT_PER_POINT    := 0.05
+
+# Broń gracza
+var weapon = {
+	"name": "Rusty Sword",
+	"base": 10,
+	"scale": {"str": 1.0, "agi": 0}
+}
+
+# --- Dungeon progres ---
+var dungeon_level:int = 1
+var enemies_defeated:int = 0
+
+# --- HP potions ---
+const POTION_HEAL := 50
+const POTION_MAX := 3
+const POTION_DROP_CHANCE := 0.15
+var potions:int = 0
+
+# --- LOOT / DROP ---
+# Szansa na drop jakiegokolwiek itemu vs. trudność przeciwnika
+const DROP_CHANCE_BY_DIFF := {
+	1: 0.15,  # łatwy
+	2: 0.15,
+	3: 0.20,
+	4: 0.33,
+	5: 0.42   # boss/trudny
+}
+
+# Wagi rzadkości w zależności od trudności (im trudniej, tym większa szansa na lepsze)
+const RARITY_WEIGHTS_BY_DIFF := {
+	1: {Rarity.COMMON: 79.95, Rarity.RARE: 18, Rarity.EPIC: 2,  Rarity.LEGENDARY: 0.05},
+	2: {Rarity.COMMON: 65, Rarity.RARE: 28, Rarity.EPIC: 6,  Rarity.LEGENDARY: 1},
+	3: {Rarity.COMMON: 50, Rarity.RARE: 35, Rarity.EPIC: 12, Rarity.LEGENDARY: 3},
+	4: {Rarity.COMMON: 38, Rarity.RARE: 38, Rarity.EPIC: 18, Rarity.LEGENDARY: 6},
+	5: {Rarity.COMMON: 25, Rarity.RARE: 35, Rarity.EPIC: 25, Rarity.LEGENDARY: 15}
+}
+
+# --- PERMANENT badge (kolory) ---
+const PERMA_COL_BG      := Color(0.18, 0.32, 0.12, 0.95)
+const PERMA_COL_BORDER  := Color(0.45, 0.80, 0.35, 1.0)
+const PERMA_COL_TEXT    := Color(0.92, 1.00, 0.92, 1.0)
+
+
+# --- INVENTORY: sloty, rzadkości, stan UI ---
+enum InvSlot { WEAPON, ARMOR, HELMET, NECKLACE }
+const INV_TABS := ["Weapon", "Armor", "Helmet", "Necklace"]
+
+enum Rarity { COMMON, RARE, EPIC, LEGENDARY }
+const RARITY_COLORS := {
+	Rarity.COMMON: Color(1,1,1),
+	Rarity.RARE: Color(0.45,0.75,1.0),
+	Rarity.EPIC: Color(0.75,0.55,0.95),
+	Rarity.LEGENDARY: Color(1.0,0.85,0.2)
+}
+
+# Spójne klucze: "weapon", "armor", "helmet", "necklace"
+var inventory: Dictionary = {
+	"weapon":  [],   # Array[Dictionary]
+	"armor":   [],   # Array[Dictionary]
+	"helmet":  [],   # Array[Dictionary]
+	"necklace":[]    # Array[Dictionary]
+}
+
+# Założone przedmioty
+var equipped_armor:   Dictionary = {}
+var equipped_helmet:  Dictionary = {}
+var equipped_necklace:Dictionary = {}
+
+# --- INVENTORY SKIN / ICONS ---
+
+# skórzane tło (fallback, jeśli nie używasz mapy UI_TEX)
+const INVENTORY_BG_TEX_PATH := "res://ui/textures/leather_bg.png"
+
+# mapowanie typów na ikony (dopisz własne jeśli chcesz)
+# --- INVENTORY ICONS ---
+
+const ICON_BY_TYPE := {
+	"sword":     "res://ikony/sword_icon.png",
+	"axe":       "res://ikony/axe_icon.png",
+	"dagger":    "res://ikony/dagger_icon.png",
+	"mace":      "res://ikony/mace_icon.png",
+	"spear":     "res://ikony/spear_icon.png",
+	"hammer":    "res://ikony/hammer_icon.png",
+	"blade":     "res://ikony/blade_icon.png",
+	"saber":     "res://ikony/saber_icon.png",
+	"bow":       "res://ikony/bow_icon.png",
+	"crossbow":  "res://ikony/crossbow_icon.png",
+	"armor":     "res://ikony/armor_icon.png",
+	"helmet":    "res://ikony/helmet_icon.png",
+	"necklace":  "res://ikony/necklace_icon.png",
+	"potion":    "res://ikony/potion_icon.png"
+}
+
+
+var _inv_bg_texrect: TextureRect = null
+
+
+# UI ekwipunku
+var inv_panel: PanelContainer 
+var inv_tab_index: int = 0 
+var inv_row_index_by_tab: Array[int] = [0, 0, 0, 0]
+var inv_labels_container: VBoxContainer
+var inv_tabs_label: Label
+var inv_overlay: ColorRect
+var inv_equipped_label: Label
+var inv_hint_label: Label
+var inventory_open: bool = false
+var inv_prev_label: Label
+var inv_next_label: Label
+# --- ITEM BONUSY OD RZADKOŚCI ---
+const BONUS_CHANCE_RARE    := 0.6   # Rare: 60% szans na bonus +1
+const BONUS_CHANCE_EPIC    := 1.0   # Epic: zawsze bonus +2..+3
+const BONUS_CHANCE_LEG     := 1.0   # Legendary: zawsze bonus +3..+8
+const BONUS_STATS := ["str","agi","vit","crit"]  # które staty mogą wypaść
+
+
+# --- UI THEME / COLORS ---
+const UI_COL = {
+	"panel": Color(0.08, 0.09, 0.12, 0.94),
+	"panel_dark": Color(0.05, 0.06, 0.08, 0.98),
+	"border": Color(0.25, 0.28, 0.35, 1.0),
+	"accent": Color(0.95, 0.82, 0.30, 1.0),
+	"text_dim": Color(0.85, 0.85, 0.88, 0.9),
+	"equip_badge": Color(0.35, 0.75, 1.0, 1.0),
+}
+
+func _make_stylebox(bg: Color, border: Color, radius: int = 10, border_w: int = 2) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.border_color = border
+	sb.border_width_left = border_w
+	sb.border_width_right = border_w
+	sb.border_width_top = border_w
+	sb.border_width_bottom = border_w
+	sb.corner_radius_top_left = radius
+	sb.corner_radius_top_right = radius
+	sb.corner_radius_bottom_left = radius
+	sb.corner_radius_bottom_right = radius
+	sb.anti_aliasing = true
+	# Delikatny cień (Godot 4)
+	sb.shadow_size = 6
+	sb.shadow_color = Color(0, 0, 0, 0.35)
+	sb.shadow_offset = Vector2(0, 2)
+	return sb
+
+func _rarity_strip_color(r: int) -> Color:
+	return RARITY_COLORS.get(r, Color.WHITE)
+
+# --- BACKGROUNDS (jedno tło w warstwie świata) ---
+var bg_sprite: Sprite2D = null  # tło w warstwie świata (zawsze za postaciami)
+
+# Klucze muszą być identyczne jak DUNGEONS[i]["name"]
+const BG_BY_DUNGEON := {
+	"Goblin Cave":      "res://backgrounds/goblin_cave.png",
+	"Undead Crypt":     "res://backgrounds/undead_crypt.png",
+	"Highlands":        "res://backgrounds/highlands.png",
+	"Orc Warcamps":     "res://backgrounds/orc_warcamps.png",
+	"Dark Elf Depths":  "res://backgrounds/dark_elf_depths.png",
+	"Elderwood":        "res://backgrounds/elderwood.png",
+}
+
+# --- TREASURE (random event) ---
+const MIN_EVENT_INTERVAL := 8        # ile zwykłych starć musi minąć między eventami
+var _event_gap_counter: int = 0      # rośnie przy zwykłych wrogach, reset przy evencie
+
+
+const TREASURE_EVENT_CHANCE := 0.10  # 10% szansy zamiast przeciwnika (zmień, jeśli chcesz)
+const TREASURE_TEX := "res://treasures/mystery_chest.png"  # opcjonalna grafika skrzyni
+
+const SHRINE_CHANCE: float = 0.02  # TESTOWO (łatwo wywołać). Po teście zmień np. na 0.10.
+var shrine_dialog: AcceptDialog
+var shrine_list_box: VBoxContainer
+var _shrine_dialog_open: bool = false
+var _shrine_locked: bool = false
+var _shrine_in_progress: bool = false 
+var shrine_cooldown: int = 0              # ile zwykłych walk jeszcze blokuje Shrine
+var _encounter_replaced_by_event: bool = false  # czy aktualny encounter to event (Shrine/Chest)
+
+
+
+
+
+const TREASURE_CHEST_DATA := {
+	"name": "Mystery Chest",
+	"hp": 50,
+	"damage": 0,
+	"difficulty": 5,   # żeby użyć tych samych wag jak boss (drop/rarity)
+	"treasure": true,
+	"tex": TREASURE_TEX
+}
+
+
+
+# --- Dungeon 1 (Goblin Cave) ---
+const MASTER_ENEMIES: Array[Dictionary] = [
+	{"name":"Goblin Servant",  "hp":18, "damage":1,  "difficulty":1, "xp":5,  "tex":"res://gobliny/goblin_servant.png"},
+	{"name":"Goblin Gatherer", "hp":22, "damage":3,  "difficulty":1, "xp":12, "tex":"res://gobliny/goblin_gatherer.png"},
+	{"name":"Goblin Knife",    "hp":28, "damage":7,  "difficulty":2, "xp":16, "tex":"res://gobliny/goblin_knife.png"},
+	{"name":"Goblin Warrior",  "hp":34, "damage":9,  "difficulty":2, "xp":20, "tex":"res://gobliny/goblin_warrior.png"},
+	{"name":"Goblin Guard",    "hp":40, "damage":11, "difficulty":3, "xp":25, "tex":"res://gobliny/goblin_guard.png"},
+	{"name":"Goblin Elite",    "hp":48, "damage":13, "difficulty":3, "xp":30, "tex":"res://gobliny/goblin_elite.png"},
+	{"name":"Goblin Captain",  "hp":56, "damage":13, "difficulty":4, "xp":35, "tex":"res://gobliny/goblin_captain.png"},
+	{"name":"Goblin Champion", "hp":66, "damage":15, "difficulty":4, "xp":40, "tex":"res://gobliny/goblin_champion.png"},
+	{"name":"Goblin General",  "hp":78, "damage":20, "difficulty":5, "xp":45, "tex":"res://gobliny/goblin_general.png"},
+	{"name":"Goblin King",     "hp":95, "damage":24, "difficulty":5, "xp":80, "tex":"res://gobliny/goblin_king.png"},
+]
+
+# --- Dungeon 2 (Undead Crypt) – placeholder ---
+const UNDEAD_ENEMIES: Array[Dictionary] = [
+	{"name":"Skeleton Grunt",   "hp":40, "damage":10, "difficulty":2, "xp":28, "tex":"res://skeletons/skeleton_grunt.png"},
+	{"name":"Skeleton Archer",  "hp":44, "damage":12, "difficulty":3, "xp":32, "tex":"res://skeletons/skeleton_archer.png"},
+	{"name":"Bone Knight",      "hp":100, "damage":16, "difficulty":4, "xp":42, "tex":"res://skeletons/bone_knight.png"},
+	{"name":"Bone Warlock",     "hp":80, "damage":20, "difficulty":4, "xp":48, "tex":"res://skeletons/bone_warlock.png"},
+	{"name":"Lich",             "hp":200, "damage":30, "difficulty":5, "xp":100, "tex":"res://skeletons/lich.png"},
+]
+
+# --- Dungeon 3: Highlands (Mountain Men) ---
+const MOUNTAIN_MEN_ENEMIES: Array[Dictionary] = [
+	{"name":"Highland Recruit",   "hp":70,  "damage":14, "difficulty":2, "xp":36, "tex":"res://humans/highland_recruit.png"},
+	{"name":"Highland Slinger",   "hp":76,  "damage":16, "difficulty":2, "xp":38, "tex":"res://humans/highland_slinger.png"},
+	{"name":"Spearman",           "hp":84,  "damage":18, "difficulty":3, "xp":42, "tex":"res://humans/spearman.png"},
+	{"name":"Sword Adept",        "hp":92,  "damage":20, "difficulty":3, "xp":46, "tex":"res://humans/sword_adept.png"},
+	{"name":"Shield Guard",       "hp":104, "damage":22, "difficulty":3, "xp":50, "tex":"res://humans/shield_guard.png"},
+	{"name":"Crossbowman",        "hp":98,  "damage":24, "difficulty":4, "xp":56, "tex":"res://humans/crossbowman.png"},
+	{"name":"War Priest",         "hp":110, "damage":26, "difficulty":4, "xp":62, "tex":"res://humans/war_priest.png"},
+	{"name":"Veteran Captain",    "hp":126, "damage":28, "difficulty":4, "xp":68, "tex":"res://humans/veteran_captain.png"},
+	{"name":"Mountain Champion",  "hp":145, "damage":30, "difficulty":5, "xp":78, "tex":"res://humans/mountain_champion.png"},
+	{"name":"High King of Peaks", "hp":230, "damage":35, "difficulty":5, "xp":120,"tex":"res://humans/high_king.png"},
+]
+
+# --- Dungeon 4: Orc Warcamps ---
+const ORC_ENEMIES: Array[Dictionary] = [
+	{"name":"Orc Grunt",       "hp":80,  "damage":18, "difficulty":2, "xp":40, "tex":"res://orcs/orc_grunt.png"},
+	{"name":"Orc Skirmisher",  "hp":86,  "damage":20, "difficulty":2, "xp":42, "tex":"res://orcs/orc_skirmisher.png"},
+	{"name":"Orc Berserker",   "hp":94,  "damage":24, "difficulty":3, "xp":48, "tex":"res://orcs/orc_berserker.png"},
+	{"name":"Orc Ravager",     "hp":102, "damage":26, "difficulty":3, "xp":52, "tex":"res://orcs/orc_ravager.png"},
+	{"name":"Boar Rider",      "hp":110, "damage":28, "difficulty":3, "xp":56, "tex":"res://orcs/boar_rider.png"},
+	{"name":"Demolisher",      "hp":118, "damage":30, "difficulty":4, "xp":64, "tex":"res://orcs/demolisher.png"},
+	{"name":"War Shaman",      "hp":120, "damage":34, "difficulty":4, "xp":70, "tex":"res://orcs/war_shaman.png"},
+	{"name":"Blackguard",      "hp":134, "damage":36, "difficulty":4, "xp":78, "tex":"res://orcs/blackguard.png"},
+	{"name":"Warmaster",       "hp":150, "damage":40, "difficulty":5, "xp":88, "tex":"res://orcs/warmaster.png"},
+	{"name":"Orc Warlord",     "hp":260, "damage":42, "difficulty":5, "xp":140,"tex":"res://orcs/orc_warlord.png"},
+]
+
+# --- Dungeon 5: Dark Elf Depths ---
+const DARK_ELF_ENEMIES: Array[Dictionary] = [
+	{"name":"Drow Initiate",     "hp":72,  "damage":20, "difficulty":2, "xp":44, "tex":"res://darkelves/drow_initiate.png"},
+	{"name":"Drow Scout",        "hp":78,  "damage":22, "difficulty":2, "xp":46, "tex":"res://darkelves/drow_scout.png"},
+	{"name":"Shade Duelist",     "hp":86,  "damage":24, "difficulty":3, "xp":52, "tex":"res://darkelves/shade_duelist.png"},
+	{"name":"Gloom Archer",      "hp":92,  "damage":26, "difficulty":3, "xp":56, "tex":"res://darkelves/gloom_archer.png"},
+	{"name":"Umbral Adept",      "hp":100, "damage":28, "difficulty":3, "xp":60, "tex":"res://darkelves/umbral_adept.png"},
+	{"name":"Nightblade",        "hp":108, "damage":32, "difficulty":4, "xp":68, "tex":"res://darkelves/nightblade.png"},
+	{"name":"Whisper Sorcerer",  "hp":112, "damage":36, "difficulty":4, "xp":76, "tex":"res://darkelves/whisper_sorcerer.png"},
+	{"name":"Matron Guard",      "hp":126, "damage":38, "difficulty":4, "xp":84, "tex":"res://darkelves/matron_guard.png"},
+	{"name":"House Champion",    "hp":144, "damage":44, "difficulty":5, "xp":96, "tex":"res://darkelves/house_champion.png"},
+	{"name":"Dread Matriarch",   "hp":240, "damage":48, "difficulty":5, "xp":150,"tex":"res://darkelves/dread_matriarch.png"},
+]
+
+# --- Dungeon 6: Elderwood (Ents) ---
+const ENT_ENEMIES: Array[Dictionary] = [
+	{"name":"Sapling",           "hp":90,  "damage":14, "difficulty":2, "xp":40, "tex":"res://ents/sapling.png"},
+	{"name":"Rootling",          "hp":98,  "damage":16, "difficulty":2, "xp":42, "tex":"res://ents/rootling.png"},
+	{"name":"Barkguard",         "hp":112, "damage":18, "difficulty":3, "xp":48, "tex":"res://ents/barkguard.png"},
+	{"name":"Spinebough",        "hp":126, "damage":20, "difficulty":3, "xp":54, "tex":"res://ents/spinebough.png"},
+	{"name":"Thorncaster",       "hp":138, "damage":22, "difficulty":3, "xp":58, "tex":"res://ents/thorncaster.png"},
+	{"name":"Oakwarden",         "hp":156, "damage":24, "difficulty":4, "xp":68, "tex":"res://ents/oakwarden.png"},
+	{"name":"Ironwood Ancient",  "hp":174, "damage":26, "difficulty":4, "xp":76, "tex":"res://ents/ironwood_ancient.png"},
+	{"name":"Grove Sentinel",    "hp":192, "damage":30, "difficulty":4, "xp":86, "tex":"res://ents/grove_sentinel.png"},
+	{"name":"Primeval Husk",     "hp":220, "damage":34, "difficulty":5, "xp":98, "tex":"res://ents/primeval_husk.png"},
+	{"name":"Ancient Worldroot", "hp":320, "damage":38, "difficulty":5, "xp":160,"tex":"res://ents/ancient_worldroot.png"},
+]
+
+const DUNGEONS := {
+	0: {"name":"Goblin Cave",   "enemies":MASTER_ENEMIES},
+	1: {"name":"Undead Crypt",  "enemies":UNDEAD_ENEMIES},
+	2: {"name":"Highlands",     "enemies":MOUNTAIN_MEN_ENEMIES}, # Mountain Men
+	3: {"name":"Orc Warcamps",  "enemies":ORC_ENEMIES},
+	4: {"name":"Dark Elf Depths","enemies":DARK_ELF_ENEMIES},
+	5: {"name":"Elderwood",     "enemies":ENT_ENEMIES},
+}
+
+# --- Aktywny dungeon/roster ---
+var current_roster: Array[Dictionary] = DUNGEONS[0]["enemies"].duplicate(true)
+var current_dungeon_index: int = 0  # 0 = Goblin Cave, 1 = Undead Crypt, 2..5 = nowe
+
+# --- Odwiedzone dungeony (start od 0) ---
+var visited_dungeons: Array[int] = [0]
+
+
+
+# --- Start ---
+func _ready() -> void:
+	# --- gwarantuje, że ui_home i ui_go_home istnieją i mają klawisze ---
+	
+
+	for e in current_roster:
+		if typeof(e) != TYPE_DICTIONARY or not (e.has("name") and e.has("hp") and e.has("damage") and e.has("difficulty")):
+			push_warning("Bad ENEMIES entry: %s" % str(e))
+
+	randomize()
+
+	# Sygnały HP / śmierci
+	player.hp_changed.connect(_on_player_hp_changed)
+	player.died.connect(_on_player_died)
+	enemy.hp_changed.connect(_on_enemy_hp_changed)
+	enemy.defeated.connect(_on_enemy_defeated)
+
+	# Sygnały XP / poziom / staty
+	player.xp_changed.connect(_on_player_xp_changed)
+	player.level_changed.connect(_on_player_level_changed)
+	player.stats_changed.connect(_on_player_stats_changed)
+
+	# Przyciski panelu statystyk
+	if btn_stats:       btn_stats.pressed.connect(_toggle_stats_panel)
+	if btn_str_plus:    btn_str_plus.pressed.connect(_on_btn_str_plus)
+	if btn_agi_plus:    btn_agi_plus.pressed.connect(_on_btn_agi_plus)
+	if btn_vit_plus:    btn_vit_plus.pressed.connect(_on_btn_vit_plus)
+	if btn_crit_plus:   btn_crit_plus.pressed.connect(_on_btn_crit_plus)
+	if btn_stats_close: btn_stats_close.pressed.connect(func(): stats_panel.visible = false)
+
+	# Boss choice dialog
+	if dungeon_choice:
+		dungeon_choice.confirmed.connect(_on_dungeon_choice_confirmed)
+		dungeon_choice.canceled.connect(_on_dungeon_choice_canceled)
+
+	# Stan startowy panelu
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+	_apply_stats_panel_font_sizes()
+
+	# Attack
+	turn = Turn.PLAYER
+	if btn_attack:
+		btn_attack.disabled = false
+		btn_attack.pressed.connect(_on_attack_pressed)
+
+	# Next enemy dialog (opcjonalny)
+	if next_dialog:
+		next_dialog.confirmed.connect(Callable(self, "_on_next_enemy_confirmed"))
+	else:
+		push_error("NextEnemyDialog not found.")
+		print_tree()
+
+	player.damaged.connect(_on_player_damaged)
+
+	# XP/Level UI
+	if xp_bar:
+		xp_bar.show_percentage = true
+		_on_player_xp_changed(player.xp, player.xp_to_next)
+	if lbl_level:
+		_on_player_level_changed(player.level, player.stat_points)
+
+	# Potions
+	_update_potions_ui()
+	if btn_use_potion:
+		btn_use_potion.pressed.connect(_on_use_potion_pressed)
+	_ensure_heal_particles()
+
+	# Inventory + UI
+	# Jeśli run ma permanenty z poprzednich runów — ładujemy je.
+	# Jeśli inventory jest puste (pierwszy run) — dajemy startowy Rusty Sword.
+	_load_permanent_items_into_inventory()
+	_create_inventory_ui()
+	_refresh_inventory_ui()
+	_style_inventory_ui()
+	_style_stats_panel()
+
+
+	# ===== SKILLS: START =====
+	# Slot [1] = Basic Strike (zastąpiony później przez Power Strike po wyborze Warrior)
+	skills.clear()
+	skill_cooldowns.clear()
+	skills[1] = {"key":"basic_strike", "name":"Basic Strike", "type":"active", "desc":"Reliable hit."}
+	skill_cooldowns[1] = 0
+	# slot [2] zostawiamy pusty – do klasowych umiejętności
+	_create_skills_ui()
+	_update_skills_ui()
+	# ===== SKILLS: END =====
+	_apply_global_font()
+
+	# ===== background =====
+	_ensure_world_background()
+	_apply_world_background_for_current_dungeon()
+	_update_world_background_position()
+
+	# Pierwszy przeciwnik
+	_spawn_enemy(_pick_enemy())
+		# --- Label aktualnego dungeonu ---
+	lbl_dungeon_name = Label.new()
+	lbl_dungeon_name.text = "Current dungeon: %s" % String(DUNGEONS[current_dungeon_index]["name"])
+	lbl_dungeon_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl_dungeon_name.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	lbl_dungeon_name.add_theme_font_size_override("font_size", 22)
+	lbl_dungeon_name.position = Vector2(get_viewport_rect().size.x / 2 - 200, 10)
+	lbl_dungeon_name.size = Vector2(400, 40)
+	lbl_dungeon_name.autowrap_mode = TextServer.AUTOWRAP_OFF
+	lbl_dungeon_name.z_index = 99
+
+	# czcionka
+	var font_res: FontFile = load("res://MedievalSharp-Bold.ttf")
+	lbl_dungeon_name.add_theme_font_override("font", font_res)
+
+	# dodaj na CanvasLayer, jeśli masz
+	if $CanvasLayer:
+		$CanvasLayer.add_child(lbl_dungeon_name)
+	else:
+		add_child(lbl_dungeon_name)
+
+	set_turn(Turn.PLAYER)
+	# tylko w wersji testowej gry:
+	#_dev_fill_inventory()
+	set_process_unhandled_input(true)
+	_dev_create_panel()
+
+
+
+func enter_home() -> void:
+	print("[HOME] entering real home scene...")
+	get_tree().change_scene_to_file("res://home_scene.tscn")
+
+
+func start_run_from_home() -> void:
+	print("[HOME] start_run_from_home()")
+	# NIE zmieniamy player.visible ani player.position
+	# (jeśli chcesz tu wywołać start encounteru, zrób to poniżej:
+	# _spawn_next_enemy() )
+
+
+func _apply_global_font() -> void:
+	var font_res: FontFile = preload("res://MedievalSharp-Bold.ttf")
+	if font_res == null:
+		push_warning("MedievalSharp-Bold.ttf not found!")
+		return
+
+	# Pobierz Theme z głównego UI
+	var theme := Theme.new()
+	theme.set_default_font(font_res)
+
+	# Opcjonalnie: ustaw wielkości bazowe
+	theme.default_font_size = 18
+
+	# Zastosuj do całego drzewa UI pod CanvasLayer
+	var root_canvas := $CanvasLayer
+	if root_canvas:
+		for node in root_canvas.find_children("*", "Control", true, false):
+			if node is Control:
+				node.add_theme_font_override("font", font_res)
+	else:
+		push_warning("CanvasLayer not found to apply font theme.")
+
+
+func set_turn(t: Turn) -> void:
+	turn = t
+	if btn_attack:
+		btn_attack.disabled = (turn != Turn.PLAYER)
+	if turn == Turn.PLAYER:
+		if lbl_log: lbl_log.text = "Your turn. Press Attack."
+	else:
+		if lbl_log: lbl_log.text = "Enemy is thinking..."
+		await get_tree().create_timer(enemy_turn_delay).timeout
+		_enemy_take_turn()
+	_update_potions_ui()
+
+func _enemy_take_turn() -> void:
+	if resolving_turn: return
+	if turn != Turn.ENEMY or not enemy.is_alive() or not player.is_alive(): return
+	resolving_turn = true
+	var desc := _enemy_attack_round()
+	if lbl_log: lbl_log.text = desc
+	await get_tree().create_timer(0.1).timeout
+	if player.is_alive():
+		set_turn(Turn.PLAYER)
+	resolving_turn = false
+
+func shake_camera(intensity: float = 6.0, duration: float = 0.15) -> void:
+	if cam == null:
+		return
+	var original := cam.offset
+	var t := get_tree().create_tween()
+	var steps := 6
+	for i in range(steps):
+		var dir := Vector2(randf() * 2.0 - 1.0, randf() * 2.0 - 1.0).normalized()
+		var off := dir * intensity
+		t.tween_property(cam, "offset", off, duration / steps * 0.9)
+	t.tween_property(cam, "offset", original, duration * 0.2)
+
+func hitstop(time_sec: float = 0.07) -> void:
+	get_tree().paused = true
+	await get_tree().create_timer(time_sec, true).timeout
+	get_tree().paused = false
+
+func _pick_enemy() -> Dictionary:
+	# 1) Eventy (Shrine / Chest) tylko gdy minął odstęp
+	if _event_gap_counter >= MIN_EVENT_INTERVAL:
+		# --- Sacred Shrine (EVENT) ---
+		if randf() < SHRINE_CHANCE:
+			_event_gap_counter = 0
+			return {"name":"Sacred Shrine","hp":0,"damage":0,"difficulty":0,"shrine":true}
+		# --- Mystery Chest (EVENT) ---
+		if randf() < TREASURE_EVENT_CHANCE:
+			_event_gap_counter = 0
+			return TREASURE_CHEST_DATA.duplicate(true)
+
+	# 2) Budowa puli zwykłych przeciwników
+	var pool: Array[Dictionary] = []
+	var valid_all: Array[Dictionary] = []
+	var cap: int = max(1, dungeon_level + 1)
+
+	for ed in current_roster:
+		if not (ed.has("name") and ed.has("hp") and ed.has("damage")):
+			continue
+		var diff: int = int(ed.get("difficulty", 1))
+		valid_all.append(ed)
+		if diff <= cap:
+			var weight: int = max(1, 6 - diff)
+			for _i in range(weight):
+				pool.append(ed)
+
+	print("[PICK] dungeon_level=%d cap=%d | pool=%d | valid_all=%d" %
+		[dungeon_level, cap, pool.size(), valid_all.size()])
+
+	# 3) Awaryjne wybory zwykłych przeciwników + inkrementacja licznika odstępu
+	if pool.is_empty() and not valid_all.is_empty():
+		var pick_any: Dictionary = valid_all[randi() % valid_all.size()]
+		if _event_gap_counter < MIN_EVENT_INTERVAL:
+			_event_gap_counter += 1
+		return pick_any
+
+	if pool.is_empty():
+		if _event_gap_counter < MIN_EVENT_INTERVAL:
+			_event_gap_counter += 1
+		return {"name":"Fallback Goblin","hp":20,"damage":5,"difficulty":1}
+
+	# 4) Normalny wybór z puli + inkrementacja licznika odstępu
+	if _event_gap_counter < MIN_EVENT_INTERVAL:
+		_event_gap_counter += 1
+	return pool[randi() % pool.size()]
+	
+
+
+
+
+func _spawn_enemy_impl(data: Dictionary) -> void:
+	var name := String(data.get("name", ""))
+	if name.to_lower().find("shrine") != -1 or bool(data.get("shrine", false)):
+		# awaryjne przekierowanie – gdyby coś ominęło router
+		call_deferred("_open_shrine_dialog")
+		return
+
+
+	current_enemy_data = data
+	enemy.setup_enemy(
+		data["name"],
+		data["hp"],
+		data["damage"],
+		data.get("tex", "")
+	)
+	_update_labels()
+	
+
+	if data.get("treasure", false):
+		if lbl_log:
+			lbl_log.text = "A mysterious chest appears! Press Attack to open it."
+	else:
+		if lbl_log:
+			lbl_log.text = "A wild %s appears!" % data["name"]
+
+
+
+func _prepare_next_enemy_with_popup() -> void:
+	next_enemy_data = _pick_enemy().duplicate(true)
+	if typeof(next_enemy_data) != TYPE_DICTIONARY \
+	or not (next_enemy_data.has("name") and next_enemy_data.has("hp") and next_enemy_data.has("damage")):
+		push_warning("Bad next_enemy_data: %s" % str(next_enemy_data))
+		next_enemy_data = {"name":"Fallback Goblin","hp":20,"damage":5,"difficulty":1}
+
+	if next_dialog:
+		next_dialog.dialog_text = "Next enemy!: %s" % next_enemy_data["name"]
+		next_dialog.popup_centered()
+	else:
+		_request_spawn(next_enemy_data)
+
+func _on_next_enemy_confirmed() -> void:
+	if next_enemy_data.is_empty():
+		next_enemy_data = _pick_enemy().duplicate(true)
+		if typeof(next_enemy_data) != TYPE_DICTIONARY \
+		or not (next_enemy_data.has("name") and next_enemy_data.has("hp") and next_enemy_data.has("damage")):
+			next_enemy_data = {"name":"Fallback Goblin","hp":20,"damage":5,"difficulty":1}
+	_request_spawn(next_enemy_data)
+	next_enemy_data = {}
+	set_turn(Turn.PLAYER)
+
+func _process(_d: float) -> void:
+	if Input.is_action_just_pressed("attack") and turn == Turn.PLAYER and player.is_alive() and enemy.is_alive():
+		_on_attack_pressed()
+	_update_world_background_position()
+
+func _on_attack_pressed() -> void:
+	if resolving_turn: return
+	if turn != Turn.PLAYER or not player.is_alive() or not enemy.is_alive(): return
+
+	# --- Treasure Chest: otwieramy natychmiast, bez D20 i tur ---
+	if bool(current_enemy_data.get("treasure", false)):
+		resolving_turn = true
+		if lbl_log: lbl_log.text = "You open the chest..."
+		await get_tree().create_timer(0.3).timeout
+		enemy.take_damage(enemy.hp)   # HP → 0, odpala sygnał defeated
+		resolving_turn = false
+		return
+
+	resolving_turn = true
+	var roll:int = randi_range(1, 20)
+	await _play_d20_animation(roll)
+	var desc: String = _player_attack_round_with_roll(roll)
+	if lbl_log:
+		lbl_log.text = desc
+	await get_tree().create_timer(0.1).timeout
+	if enemy.is_alive():
+		set_turn(Turn.ENEMY)
+	_tick_skill_cooldowns()
+	resolving_turn = false
+
+# --- Tura gracza ---
+func _player_attack_round_with_roll(roll:int) -> String:
+	var text := ""
+	
+	# 10 = graze (połowa normalnych obrażeń, bez kryta)
+	if roll == 10:
+		var base_dmg:int = calc_player_weapon_damage()
+		var graze:int = max(1, int(round(base_dmg * 0.5)))
+		enemy.take_damage(graze)
+		show_damage_popup(enemy, str(graze), "hit")
+		text += "You roll %d → GRAZE for %d dmg.\n" % [roll, graze]
+		if not enemy.is_alive():
+			text += "Enemy defeated!"
+		return text
+	
+	if roll >= HIT_DC:
+		var dmg:int = calc_player_weapon_damage()
+		var crit := (roll == CRIT)
+		if crit:
+			dmg = int(round(dmg * calc_crit_multiplier()))
+		enemy.take_damage(dmg)
+		show_damage_popup(enemy, str(dmg), "crit" if crit else "hit")
+		text += "You roll %d → HIT%s for %d dmg.\n" % [roll, " (CRIT!)" if crit else "", dmg]
+
+		# Barbarian lifesteal na CRIT
+		if crit and bloodlust_lifesteal > 0.0 and player.is_alive():
+			var heal = max(1, int(round(dmg * bloodlust_lifesteal)))
+			player.hp = min(player.max_hp, player.hp + heal)
+			player.emit_signal("hp_changed", player.hp, player.max_hp)
+			show_damage_popup(player, "+" + str(heal), "heal")
+
+		if not enemy.is_alive():
+			text += "Enemy defeated!"
+			return text
+	else:
+		show_damage_popup(enemy, "dodge", "miss")
+		text += "You roll %d → MISS.\n" % roll
+	return text
+
+
+
+# --- Tura przeciwnika ---
+func _enemy_attack_round() -> String:
+	if not enemy.is_alive() or not player.is_alive():
+		return ""
+		# Treasure Chest – nie atakuje
+	if bool(current_enemy_data.get("treasure", false)):
+		# nic nie robi; wracamy turę do gracza
+		return "The chest does nothing..."
+
+	var roll: int = randi_range(1, 20)
+
+	# CRIT przeciwnika
+	if roll == CRIT:
+		# Pasywny unik Assassina (5% wg passive_dodge_chance)
+		if passive_dodge_chance > 0.0 and randf() < passive_dodge_chance:
+			show_damage_popup(player, "dodge", "miss")
+			return "Enemy rolls %d → would CRIT, but you DODGE!" % roll
+		var dmg_crit: int = int(round(enemy.damage * CRIT_MULT))
+		_apply_player_damage(dmg_crit, "crit")
+		return "Enemy rolls %d → CRIT for %d dmg." % [roll, dmg_crit]
+
+	# Zwykły HIT przeciwnika
+	elif roll >= HIT_DC:
+		if passive_dodge_chance > 0.0 and randf() < passive_dodge_chance:
+			show_damage_popup(player, "dodge", "miss")
+			return "Enemy rolls %d → would HIT, but you DODGE!" % roll
+		var dmg_hit: int = enemy.damage
+		_apply_player_damage(dmg_hit, "hit")
+		return "Enemy rolls %d → HIT for %d dmg." % [roll, dmg_hit]
+
+	# PUDŁO przeciwnika
+	else:
+		show_damage_popup(player, "dodge", "miss")
+		return "Enemy rolls %d → MISS." % roll
+
+
+
+# Wspólna aplikacja obrażeń na gracza
+func _apply_player_damage(dmg:int, kind:String = "hit") -> void:
+	# BLOCK z Guardiana – całkowicie anuluje jedno kolejne trafienie
+	if shield_active:
+		shield_active = false
+		show_damage_popup(player, "BLOCK", "heal")
+		if lbl_log:
+			lbl_log.text = "Your shield blocks the entire hit!"
+		return
+
+	var original:int = clamp(dmg, 0, 99999)
+
+	# DR z pancerza + pasywne DR Guardiana
+	var dr: float = 0.0
+	if not equipped_armor.is_empty():
+		dr = clamp(float(equipped_armor.get("dr", 0.0)), 0.0, 0.95)
+	# pasywne DR
+	if passive_dr_bonus > 0.0:
+		dr = clamp(dr + passive_dr_bonus, 0.0, 0.95)
+
+	var final_dmg:int = original
+	if dr > 0.0:
+		final_dmg = int(round(float(original) * (1.0 - dr)))
+	final_dmg = max(0, final_dmg)
+
+	if final_dmg <= 0:
+		show_damage_popup(player, "0", "hit")
+		return
+
+	player.take_damage(final_dmg)
+	show_damage_popup(player, str(final_dmg), kind)
+
+
+
+func _transition_to_next_enemy() -> void:
+	if btn_attack:
+		btn_attack.disabled = true
+
+	var start_pos: Vector2 = enemy.position
+	var tw_out := get_tree().create_tween()
+	tw_out.tween_property(enemy, "modulate:a", 0.0, 0.18)
+	tw_out.parallel().tween_property(enemy, "position:x", start_pos.x + 60.0, 0.18)
+	await tw_out.finished
+
+	# Wybór następnego encounteru
+	var next_data: Dictionary = _pick_enemy()
+
+	# Przygotuj scenę pod nowe wejście
+	enemy.modulate.a = 0.0
+	enemy.position = Vector2(start_pos.x - 60.0, start_pos.y)
+
+	# KLUCZOWE: spawn zawsze przez router (obsłuży Shrine/Chest itd.)
+	_request_spawn(next_data)
+
+	# Daj jedną–dwie klatki na zmianę sprite/labeli zanim wjedziemy tweenem
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	# „Wejście” nowego przeciwnika
+	var tw_in := get_tree().create_tween()
+	tw_in.tween_property(enemy, "modulate:a", 1.0, 0.22)
+	tw_in.parallel().tween_property(enemy, "position:x", start_pos.x, 0.22)
+	await tw_in.finished
+
+	if btn_attack:
+		btn_attack.disabled = false
+
+
+func calc_player_weapon_damage() -> int:
+	var base:int = int(weapon.get("base", weapon.get("damage", 10)))
+	var wscale:Dictionary = weapon.get("scale", {})
+	var mult := 1.0
+	mult += float(player.strength) * STR_DMG_PER_POINT * float(wscale.get("str", 0.0))
+	mult += float(player.agility)  * AGI_DMG_PER_POINT * float(wscale.get("agi", 0.0))
+
+	# Warrior passive: Weapon Mastery (~+10% dmg)
+	if chosen_class == "warrior":
+		mult *= 1.10
+
+	return max(1, int(round(base * mult)))
+
+
+# --- (opcjonalne) Losowanie nowego przeciwnika bez popupa ---
+# _load_next_enemy() -- usunięta (martwy kod; zastąpiona przez _transition_to_next_enemy + _request_spawn)
+
+# --- Aktualizacje UI ---
+func _on_player_hp_changed(cur:int, maxv:int) -> void:
+	if player_hp_bar:
+		player_hp_bar.max_value = maxv
+		player_hp_bar.value = cur
+	lbl_player.text = "Player HP: %d / %d\nWeapon: %s (DMG: %d)" % [
+		cur, maxv, weapon["name"], calc_player_weapon_damage()
+	]
+	_update_potions_ui()
+
+func _on_enemy_hp_changed(cur:int, maxv:int) -> void:
+	if enemy_hp_bar:
+		enemy_hp_bar.max_value = maxv
+		enemy_hp_bar.value = cur
+	lbl_enemy.text = "%s\nHP: %d / %d\nDMG: %d" % [enemy.name_display, cur, maxv, enemy.damage]
+
+func _on_enemy_defeated() -> void:
+	var last_enemy: Dictionary = {}
+	if typeof(current_enemy_data) == TYPE_DICTIONARY:
+		last_enemy = current_enemy_data.duplicate(true)
+		# --- Treasure Chest reward flow ---
+	if bool(last_enemy.get("treasure", false)):
+		# SZANSA na drop jak u bossa: DROP_CHANCE_BY_DIFF[5]; w przeciwnym razie HEAL
+		var boss_drop_chance := float(DROP_CHANCE_BY_DIFF.get(5, 0.42))
+		var did_drop_item := (randf() <= boss_drop_chance)
+
+		if did_drop_item:
+			# losujemy slot i item jak przy zwykłym dropie, ale diff=5 (boss)
+			var slot_roll := randi() % 100
+			var slot_key := ""
+			if slot_roll < 40:
+				slot_key = "weapon"
+			elif slot_roll < 75:
+				slot_key = "armor"
+			elif slot_roll < 90:
+				slot_key = "helmet"
+			else:
+				slot_key = "necklace"
+
+			var rarity := _weighted_rarity_by_diff(5)
+			var item := _gen_random_item(slot_key, rarity, 5)
+			var ref := _add_item_to_inventory(item)
+
+			if lbl_log:
+				lbl_log.text = "Treasure: %s (%s)" % [str(item.get("name","???")), _rarity_name(int(item.get("rarity", Rarity.COMMON)))]
+			show_damage_popup(player, str(item.get("name","???")), "heal")
+			_refresh_inventory_ui()
+			if not ref.is_empty():
+				_show_loot_popup(item, String(ref["key"]), int(ref["index"]))
+		else:
+			# pełne leczenie + dopełnienie mikstur do 3
+			player.hp = player.max_hp
+			player.emit_signal("hp_changed", player.hp, player.max_hp)
+			if potions < POTION_MAX:
+				potions = POTION_MAX
+				_update_potions_ui()
+			show_damage_popup(player, "FULL HEAL", "heal")
+			if lbl_log:
+				lbl_log.text = "Treasure: fully healed and potions refilled!"
+
+		# Po nagrodzie – od razu kolejny przeciwnik
+		await _transition_to_next_enemy()
+		set_turn(Turn.PLAYER)
+		return
+	var gained_xp := 15
+	var killed_name := "???"
+	if not last_enemy.is_empty():
+		killed_name = str(last_enemy.get("name", "???"))
+		var diff := int(last_enemy.get("difficulty", 1))
+		var base := int(last_enemy.get("xp", 10 + 10 * (diff - 1)))
+		gained_xp = base + int(diff * (player.level * 0.2))
+		print("[XP] Killed: %s | diff=%d | base=%d | lvl=%d → gained=%d" %
+			[killed_name, diff, base, player.level, gained_xp])
+	else:
+		push_warning("last_enemy snapshot empty; using fallback XP=%d" % gained_xp)
+	player.add_xp(gained_xp)
+	if lbl_log:
+		lbl_log.text = "Enemy defeated! +%d XP" % gained_xp
+	_try_drop_potion()
+		# PRÓBA DROPu ITEMU
+	_roll_enemy_loot_drop(last_enemy)
+	enemies_defeated += 1
+	if enemies_defeated % 20 == 0:
+		dungeon_level += 1
+		print("[DUNGEON] Level up → dungeon_level=", dungeon_level)
+	if _is_current_boss(killed_name):
+		# 1) Po bossie D1 (Goblin King) – klasyczny wybór: Undead Crypt lub zostań
+		if current_dungeon_index == 0 and killed_name == "Goblin King":
+			_offer_dungeon_choice(killed_name)  # "go to next dungeon" -> Undead Crypt, albo "Stay here"
+			return
+
+		# 2) Od bossa D2 (Lich) oraz w kolejnych dungeonach – losowanie nieodwiedzonych
+		_offer_branch_choice_after_boss()
+		return
+
+
+
+
+	await _transition_to_next_enemy()
+	set_turn(Turn.PLAYER)
+
+func _on_player_damaged(amount:int) -> void:
+	shake_camera(8.0, 0.18)
+	if amount >= 15:
+		hitstop(0.06)
+
+# func _on_enemy_damaged(_amount:int) -> void:
+# 	shake_camera(5.0, 0.12)
+
+func _on_player_died() -> void:
+	lbl_player.text = "☠ Player DEAD ☠\nEnemies defeated: %d" % enemies_defeated
+	lbl_log.text = "Game Over."
+	if btn_attack:
+		btn_attack.disabled = true
+ 
+	# Powiadom GameState o śmierci (czyści inventory runa, nie rusza permanentów)
+	GameState.on_player_death()
+ 
+	# Odczekaj chwilę, żeby gracz zobaczył komunikat, potem pokaż Game Over screen
+	await get_tree().create_timer(1.2).timeout
+	_show_game_over_screen()
+ 
+ 
+func _show_game_over_screen() -> void:
+	# Overlay przyciemniający
+	var overlay := ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0)
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 300
+	$CanvasLayer.add_child(overlay)
+ 
+	# Fade-in
+	var tw_fade := get_tree().create_tween()
+	tw_fade.tween_property(overlay, "modulate:a", 0.82, 0.6)
+	await tw_fade.finished
+ 
+	# Panel
+	var panel := PanelContainer.new()
+	panel.z_index = 301
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.06, 0.04, 0.04, 0.97)
+	sb.border_color = Color(0.7, 0.15, 0.10, 1.0)
+	sb.set_border_width_all(3)
+	sb.set_corner_radius_all(16)
+	sb.shadow_size = 14
+	sb.shadow_color = Color(0, 0, 0, 0.6)
+	panel.add_theme_stylebox_override("panel", sb)
+ 
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -240
+	panel.offset_right = 240
+	panel.offset_top = -180
+	panel.offset_bottom = 180
+ 
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 18)
+	panel.add_child(vbox)
+ 
+	# Tytuł
+	var title := Label.new()
+	title.text = "☠  GAME OVER  ☠"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_color_override("font_color", Color(0.9, 0.22, 0.18))
+	title.add_theme_font_size_override("font_size", 42)
+	if DMG_FONT:
+		title.add_theme_font_override("font", DMG_FONT)
+	vbox.add_child(title)
+ 
+	# Statystyki runa
+	var stats := Label.new()
+	stats.text = "Enemies defeated: %d\nDungeon: %s\nPlayer Level: %d" % [
+		enemies_defeated,
+		String(DUNGEONS[current_dungeon_index]["name"]),
+		player.level
+	]
+	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	stats.add_theme_color_override("font_color", Color(0.85, 0.80, 0.75))
+	stats.add_theme_font_size_override("font_size", 20)
+	if DMG_FONT:
+		stats.add_theme_font_override("font", DMG_FONT)
+	vbox.add_child(stats)
+ 
+	# Nota o permanentach
+	var perm_note := Label.new()
+	perm_note.text = "Your PERMANENT items are safe in the chest."
+	perm_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	perm_note.add_theme_color_override("font_color", Color(0.55, 0.90, 0.45))
+	perm_note.add_theme_font_size_override("font_size", 16)
+	if DMG_FONT:
+		perm_note.add_theme_font_override("font", DMG_FONT)
+	vbox.add_child(perm_note)
+ 
+	# Przyciski
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 16)
+	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_child(btn_row)
+ 
+	var btn_retry := _make_styled_button("▶  Play Again", Color(0.95, 0.82, 0.30))
+	var btn_home  := _make_styled_button("🏠  Main Menu", Color(0.55, 0.75, 1.0))
+	btn_row.add_child(btn_retry)
+	btn_row.add_child(btn_home)
+ 
+	btn_retry.pressed.connect(func():
+		get_tree().reload_current_scene()
+	)
+	btn_home.pressed.connect(func():
+		get_tree().change_scene_to_file("res://home_scene.tscn")
+	)
+ 
+	$CanvasLayer.add_child(panel)
+ 
+	# Pop-in animacja
+	panel.modulate = Color(1, 1, 1, 0)
+	panel.scale = Vector2(0.88, 0.88)
+	var tw_in := get_tree().create_tween()
+	tw_in.tween_property(panel, "modulate:a", 1.0, 0.22)
+	tw_in.parallel().tween_property(panel, "scale", Vector2(1, 1), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+ 
+ 
+# Pomocnicza funkcja do tworzenia przycisków Game Over screena
+func _make_styled_button(label_text: String, col: Color) -> Button:
+	var b := Button.new()
+	b.text = label_text
+	b.custom_minimum_size = Vector2(180, 48)
+	b.add_theme_font_size_override("font_size", 20)
+	if DMG_FONT:
+		b.add_theme_font_override("font", DMG_FONT)
+	var bsb := StyleBoxFlat.new()
+	bsb.bg_color = Color(col.r * 0.25, col.g * 0.25, col.b * 0.25, 0.95)
+	bsb.border_color = col
+	bsb.set_border_width_all(2)
+	bsb.set_corner_radius_all(10)
+	var bhov := bsb.duplicate() as StyleBoxFlat
+	bhov.bg_color = Color(col.r * 0.40, col.g * 0.40, col.b * 0.40, 0.95)
+	b.add_theme_stylebox_override("normal", bsb)
+	b.add_theme_stylebox_override("hover", bhov)
+	b.add_theme_color_override("font_color", col)
+	return b
+
+func _update_labels() -> void:
+	_on_player_hp_changed(player.hp, player.max_hp)
+	_on_enemy_hp_changed(enemy.hp, enemy.max_hp)
+
+func show_damage_popup(target: Node2D, text: String, kind: String = "hit") -> void:
+	var color := Color(1, 0.3, 0.3)
+	var size := 40
+	if kind == "miss":
+		color = Color(0.8, 0.8, 0.8); size = 40
+	elif kind == "crit":
+		color = Color(1, 0.95, 0.35); size = 55
+	elif kind == "heal":
+		color = Color(0.4, 1.0, 0.4); size = 45
+
+	var shadow := Label.new()
+	shadow.text = text
+	shadow.modulate = Color(0, 0, 0, 0.6)
+	if DMG_FONT:
+		shadow.add_theme_font_override("font", DMG_FONT)
+	shadow.add_theme_font_size_override("font_size", size)
+
+	var label := Label.new()
+	label.text = text
+	label.modulate = color
+	label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	if DMG_FONT:
+		label.add_theme_font_override("font", DMG_FONT)
+	label.add_theme_font_size_override("font_size", size)
+
+	fx_root.add_child(shadow)
+	fx_root.add_child(label)
+
+	var viewport_size := get_viewport().get_visible_rect().size
+	var screen_pos := (target.global_position - cam.global_position) + viewport_size * 0.5
+	shadow.position = screen_pos + Vector2(2, -48)
+	label.position = screen_pos + Vector2(0, -50)
+
+	var t1 := get_tree().create_tween()
+	t1.tween_property(label, "position", label.position + Vector2(0, -40), 0.5)
+	t1.parallel().tween_property(label, "modulate:a", 0.0, 1.0).from(1.0)
+	t1.finished.connect(func(): label.queue_free())
+
+	var t2 := get_tree().create_tween()
+	t2.tween_property(shadow, "position", shadow.position + Vector2(0, -40), 0.5)
+	t2.parallel().tween_property(shadow, "modulate:a", 0.0, 0.5).from(0.6)
+	t2.finished.connect(func(): shadow.queue_free())
+
+func _on_player_xp_changed(current_xp: int, xp_to_next: int) -> void:
+	if xp_bar:
+		xp_bar.max_value = max(1, xp_to_next)
+		var tween := get_tree().create_tween()
+		tween.tween_property(xp_bar,"value",clamp(current_xp, 0, xp_to_next),0.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+func _on_player_level_changed(level: int, _stat_points: int) -> void:
+	if lbl_level:
+		lbl_level.text = "LVL %d" % level
+	if xp_bar:
+		var original_modulate := xp_bar.modulate
+		var t := get_tree().create_tween()
+		t.tween_property(xp_bar, "modulate", Color(1.0, 0.9, 0.4, 1.0), 0.12).from(original_modulate)
+		t.tween_interval(0.05)
+		t.tween_property(xp_bar, "modulate", original_modulate, 0.2)
+	if not has_evolved and level >= EVOLVE_LEVEL:
+		_show_evolution_choice()
+	_open_stats_panel_auto_on_level_up()
+
+func _play_d20_animation(final_roll:int) -> void:
+	var overlay := ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0.45)
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	var box := CenterContainer.new()
+	box.set_anchors_preset(Control.PRESET_FULL_RECT)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	var lbl := Label.new()
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.text = "–"
+	if DMG_FONT:
+		lbl.add_theme_font_override("font", DMG_FONT)
+	lbl.add_theme_font_size_override("font_size", 150)
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	lbl.add_theme_constant_override("outline_size", 8)
+	lbl.modulate = Color(1, 1, 1)
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	box.add_child(lbl)
+	overlay.add_child(box)
+
+	# --- D20 icon (bottom-left) ---
+	var D20_TEX_PATH := "res://ui/d20.png" # <- podmień, jeśli masz inną ścieżkę
+	var dice := TextureRect.new()
+	var dtex := load(D20_TEX_PATH)
+	if dtex is Texture2D:
+		dice.texture = dtex
+	dice.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	dice.size = Vector2(96, 96)                    # docelowy rozmiar ikony
+	dice.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	# margines 16 px od krawędzi
+	dice.offset_left = 16
+	dice.offset_bottom = 16
+	dice.offset_right = dice.offset_left + dice.size.x
+	dice.offset_top = dice.offset_bottom - dice.size.y
+	overlay.add_child(dice)
+	# --- /D20 icon ---
+
+	var layer := $CanvasLayer
+	if layer:
+		layer.add_child(overlay)
+	else:
+		$CanvasLayer/UIRoot.add_child(overlay)
+	overlay.move_to_front()
+
+	var steps := 14
+	for i in range(steps):
+		lbl.text = str(randi_range(1, 20))
+		lbl.scale = Vector2(1.15, 1.15)
+		lbl.rotation = deg_to_rad(randf_range(-4, 4))
+		var t_pop := get_tree().create_tween()
+		t_pop.tween_property(lbl, "scale", Vector2(1, 1), 0.06).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		await get_tree().create_timer(0.02 + i * 0.015).timeout
+
+	var is_crit := (final_roll == CRIT)
+	var is_miss := (final_roll < HIT_DC)
+	lbl.text = str(final_roll)
+
+	if is_crit:
+		lbl.modulate = Color(1.0, 0.95, 0.3)
+	elif is_miss:
+		lbl.modulate = Color(0.6, 0.6, 0.6)
+	else:
+		lbl.modulate = Color(1, 1, 1)
+
+	var tw := get_tree().create_tween()
+	tw.tween_property(lbl, "scale", Vector2(1.4, 1.4), 0.08).from(Vector2(1, 1))
+	tw.parallel().tween_property(lbl, "rotation", 0.0, 0.1)
+	if is_crit:
+		tw.parallel().tween_property(lbl, "modulate", Color(1.0, 1.0, 0.6), 0.08).from(lbl.modulate)
+	elif is_miss:
+		tw.parallel().tween_property(lbl, "modulate", Color(0.5, 0.5, 0.5), 0.08).from(lbl.modulate)
+	await tw.finished
+
+	if is_crit:
+		shake_camera(10.0, 0.2)
+	elif is_miss:
+		shake_camera(4.0, 0.15)
+
+	await get_tree().create_timer(0.25).timeout
+
+	var flash := ColorRect.new()
+	flash.color = Color(1, 1, 1, 0.6)
+	flash.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(flash)
+	var tw_flash := get_tree().create_tween()
+	tw_flash.tween_property(flash, "modulate:a", 0.0, 0.2)
+	tw_flash.tween_property(overlay, "modulate:a", 0.0, 0.25).set_delay(0.05)
+	await tw_flash.finished
+
+	overlay.queue_free()
+
+
+
+# _offer_branch_after_lich() -- usunięta (martwy kod; zastąpiona przez _offer_branch_choice_after_boss)
+
+func _switch_to_dungeon(idx:int) -> void:
+	if not DUNGEONS.has(idx):
+		push_warning("Unknown dungeon index: %d" % idx)
+		return
+
+	current_dungeon_index = idx
+	current_roster = (DUNGEONS[idx]["enemies"] as Array[Dictionary]).duplicate(true)
+	dungeon_level = 1
+	enemies_defeated = 0
+	
+	_apply_world_background_for_current_dungeon()
+
+
+	# Zapisz jako odwiedzony
+	if not visited_dungeons.has(idx):
+		visited_dungeons.append(idx)
+
+	if lbl_log:
+		lbl_log.text = "Entering: %s" % String(DUNGEONS[idx]["name"])
+	
+	if lbl_dungeon_name:
+		lbl_dungeon_name.text = "Current dungeon: %s" % String(DUNGEONS[current_dungeon_index]["name"])
+
+	_request_spawn(_pick_enemy())
+	set_turn(Turn.PLAYER)
+
+
+
+# --- Handlery przycisków „+” ---
+func _on_btn_str_plus() -> void:
+	_lock_stats_buttons(true)
+	player.add_strength()
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+	_bump_label(lbl_str)
+	_lock_stats_buttons(false)
+
+func _on_btn_agi_plus() -> void:
+	_lock_stats_buttons(true)
+	player.add_agility()
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+	_bump_label(lbl_agi)
+	_lock_stats_buttons(false)
+
+func _on_btn_vit_plus() -> void:
+	_lock_stats_buttons(true)
+	player.add_vitality()
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+	_bump_label(lbl_vit)
+	_lock_stats_buttons(false)
+
+func _on_btn_crit_plus() -> void:
+	_lock_stats_buttons(true)
+	player.add_crit()
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+	_bump_label(lbl_crit)
+	_lock_stats_buttons(false)
+
+# --- Stats panel handlers ---
+func _toggle_stats_panel() -> void:
+	if not stats_panel:
+		push_warning("Stats panel not found at path CanvasLayer/UIRoot/StatsPanel")
+		return
+	if stats_panel.visible:
+		_hide_stats_panel()
+	else:
+		_show_stats_panel()
+
+func _show_stats_panel() -> void:
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+	stats_panel.visible = true
+	stats_panel.modulate = Color(1, 1, 1, 0.0)
+	stats_panel.scale = Vector2(1.06, 1.06)
+	stats_panel.move_to_front()
+	var tw := get_tree().create_tween()
+	tw.tween_property(stats_panel, "modulate:a", 1.0, 0.15).from(0.0)
+	tw.parallel().tween_property(stats_panel, "scale", Vector2(1, 1), 0.15)
+	if btn_attack:
+		btn_attack.disabled = (player.stat_points > 0)
+
+func _hide_stats_panel() -> void:
+	if not stats_panel:
+		return
+	var tw := get_tree().create_tween()
+	tw.tween_property(stats_panel, "modulate:a", 0.0, 0.12).from(stats_panel.modulate.a)
+	tw.parallel().tween_property(stats_panel, "scale", Vector2(1.02, 1.02), 0.12)
+	await tw.finished
+	stats_panel.visible = false
+
+func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel") and stats_panel and stats_panel.visible:
+		_hide_stats_panel()
+	if event.is_action_pressed("toggle_stats"):
+		_toggle_stats_panel()
+	if event.is_action_pressed("use_potion"):
+		_use_potion()
+
+	# --- INVENTORY CONTROL ---
+	if event.is_action_pressed("toggle_inventory"):
+		if inventory_open:
+			_close_inventory()
+		else:
+			_open_inventory()
+		get_viewport().set_input_as_handled()
+		return
+
+	if inventory_open:
+		if event.is_action_pressed("ui_left"):
+			inv_tab_index = (inv_tab_index - 1 + INV_TABS.size()) % INV_TABS.size()
+			_refresh_inventory_ui()
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("ui_right"):
+			inv_tab_index = (inv_tab_index + 1) % INV_TABS.size()
+			_refresh_inventory_ui()
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("ui_up"):
+			var key := _tab_key(inv_tab_index)
+			var arr: Array = inventory.get(key, [])
+			if arr.size() > 0:
+				inv_row_index_by_tab[inv_tab_index] = (inv_row_index_by_tab[inv_tab_index] - 1 + arr.size()) % arr.size()
+				_refresh_inventory_ui()
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("ui_down"):
+			var key2 := _tab_key(inv_tab_index)
+			var arr2: Array = inventory.get(key2, [])
+			if arr2.size() > 0:
+				inv_row_index_by_tab[inv_tab_index] = (inv_row_index_by_tab[inv_tab_index] + 1) % arr2.size()
+				_refresh_inventory_ui()
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("ui_accept"): # Enter/Space
+			var k := _tab_key(inv_tab_index)
+			var row := inv_row_index_by_tab[inv_tab_index]
+			_equip_item(k, row)
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("ui_cancel"):
+			_close_inventory()
+			get_viewport().set_input_as_handled()
+			return
+
+	# --- SKILLS HOTKEYS (1 i 2) ---
+	if event is InputEventKey and event.pressed and not event.echo and not inventory_open:
+		if event.keycode == KEY_1:
+			_try_use_skill(1)
+			get_viewport().set_input_as_handled()
+			return
+		if event.keycode == KEY_2:
+			_try_use_skill(2)
+			get_viewport().set_input_as_handled()
+			return
+
+	# odblokuj Attack jeśli to tura gracza
+	if turn == Turn.PLAYER and btn_attack:
+		btn_attack.disabled = false
+
+
+func _on_player_stats_changed(strn:int, agi:int, vit:int, crit:int, points:int) -> void:
+	if lbl_stats_header: lbl_stats_header.text = "Stats"
+	if lbl_str:   lbl_str.text   = "STR: %d"  % strn
+	if lbl_agi:   lbl_agi.text   = "AGI: %d"  % agi
+	if lbl_vit:   lbl_vit.text   = "VIT: %d"  % vit
+	if lbl_crit:  lbl_crit.text  = "CRIT: %d" % crit
+	if lbl_points: lbl_points.text = "Unspent points: %d" % points
+
+	var enable := points > 0
+	if btn_str_plus:  btn_str_plus.disabled  = not enable
+	if btn_agi_plus:  btn_agi_plus.disabled  = not enable
+	if btn_vit_plus:  btn_vit_plus.disabled  = not enable
+	if btn_crit_plus: btn_crit_plus.disabled = not enable
+
+	if btn_attack:
+		btn_attack.disabled = (points > 0 and stats_panel and stats_panel.visible)
+
+	if points <= 0 and stats_panel and stats_panel.visible:
+		stats_panel.visible = false
+		if turn == Turn.PLAYER and btn_attack:
+			btn_attack.disabled = false
+	_update_labels()
+
+func _open_stats_panel_auto_on_level_up() -> void:
+	if not stats_panel: return
+	stats_panel.visible = true
+	stats_panel.modulate = Color(1, 1, 1, 0.0)
+	stats_panel.scale = Vector2(1.08, 1.08)
+	var tw := get_tree().create_tween()
+	tw.tween_property(stats_panel, "modulate:a", 1.0, 0.15).from(0.0)
+	tw.parallel().tween_property(stats_panel, "scale", Vector2(1, 1), 0.18)
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+
+# --- Helpers: blokada klików i „bump” animacyjny ---
+func _lock_stats_buttons(state: bool) -> void:
+	if btn_str_plus:  btn_str_plus.disabled  = state
+	if btn_agi_plus:  btn_agi_plus.disabled  = state
+	if btn_vit_plus:  btn_vit_plus.disabled  = state
+	if btn_crit_plus: btn_crit_plus.disabled = state
+
+func _bump_label(lbl: Label) -> void:
+	if lbl == null: return
+	var start_scale := lbl.scale
+	var start_color := lbl.modulate
+	var tw := get_tree().create_tween()
+	tw.tween_property(lbl, "scale", start_scale * Vector2(1.08, 1.08), 0.08).from(start_scale)
+	tw.parallel().tween_property(lbl, "modulate", Color(1, 1, 1, 1), 0.08).from(start_color)
+	tw.tween_interval(0.03)
+	tw.tween_property(lbl, "scale", start_scale, 0.10)
+	tw.parallel().tween_property(lbl, "modulate", start_color, 0.10)
+
+# --- Powiększenie fontów w stats panelu ---
+func _apply_stats_panel_font_sizes() -> void:
+	var header_size := 28
+	var label_size := 22
+	var points_size := 22
+	var button_size := 20
+	if lbl_stats_header:
+		lbl_stats_header.add_theme_font_size_override("font_size", header_size)
+	for l in [lbl_str, lbl_agi, lbl_vit, lbl_crit]:
+		if l:
+			l.add_theme_font_size_override("font_size", label_size)
+	if lbl_points:
+		lbl_points.add_theme_font_size_override("font_size", points_size)
+	for b in [btn_str_plus, btn_agi_plus, btn_vit_plus, btn_crit_plus, btn_stats_close]:
+		if b:
+			b.add_theme_font_size_override("font_size", button_size)
+
+# --- POTIONS: UI i logika ---
+func _update_potions_ui() -> void:
+	if potion_label:
+		potion_label.text = "%d/%d" % [potions, POTION_MAX]
+	var can_use: bool = (turn == Turn.PLAYER) and (potions > 0) and (player.hp < player.max_hp)
+	if btn_use_potion:
+		btn_use_potion.disabled = not can_use
+
+func _on_use_potion_pressed() -> void:
+	_use_potion()
+
+func _use_potion() -> void:
+	if turn != Turn.PLAYER or resolving_turn:
+		_update_potions_ui()
+		return
+	if potions <= 0:
+		_update_potions_ui()
+		return
+	if player.hp >= player.max_hp:
+		_update_potions_ui()
+		return
+
+	var was_player_turn: bool = (turn == Turn.PLAYER)
+	resolving_turn = true
+
+	var missing: int = player.max_hp - player.hp
+	var heal: int = min(POTION_HEAL, missing)
+
+	player.hp = min(player.hp + heal, player.max_hp)
+	player.emit_signal("hp_changed", player.hp, player.max_hp)
+	potions -= 1
+	_update_potions_ui()
+
+	show_damage_popup(player, "+" + str(heal), "heal")
+	if player.has_method("play_heal_flash"):
+		player.play_heal_flash()
+	if player.has_method("play_heal_particles"):
+		player.play_heal_particles()
+
+	await get_tree().create_timer(0.25).timeout
+
+	if was_player_turn and player.is_alive() and enemy.is_alive():
+		set_turn(Turn.ENEMY)
+	else:
+		if turn == Turn.PLAYER and btn_attack:
+			btn_attack.disabled = false
+
+	resolving_turn = false
+
+func _try_drop_potion() -> void:
+	if potions >= POTION_MAX:
+		return
+	if randf() <= POTION_DROP_CHANCE:
+		potions += 1
+		_update_potions_ui()
+		if lbl_log:
+			lbl_log.text = "You found a Health Potion! (%d/%d)" % [potions, POTION_MAX]
+		show_damage_popup(player, "+Potion", "heal")
+
+func play_heal_flash() -> void:
+	var start_color := modulate
+	var start_scale := scale
+	var t := get_tree().create_tween()
+	t.tween_property(self, "modulate", Color(0.2, 1.0, 0.2, 1.0), 0.12).from(start_color)
+	t.parallel().tween_property(self, "scale", start_scale * Vector2(1.06, 1.06), 0.12).from(start_scale)
+	t.tween_interval(0.06)
+	t.tween_property(self, "modulate", start_color, 0.16)
+	t.parallel().tween_property(self, "scale", start_scale, 0.16)
+
+func _ensure_heal_particles() -> void:
+	if _heal_particles: return
+	_heal_particles = GPUParticles2D.new()
+	_heal_particles.one_shot = true
+	_heal_particles.lifetime = 0.7
+	_heal_particles.amount = 24
+	_heal_particles.explosiveness = 0.2
+	_heal_particles.emitting = false
+	_heal_particles.position = Vector2(0, -12)
+	var mat := ParticleProcessMaterial.new()
+	mat.gravity = Vector3(0, -5, 0)
+	mat.initial_velocity_min = 45
+	mat.initial_velocity_max = 80
+	mat.angle_min = -25.0
+	mat.angle_max = 25.0
+	mat.scale_min = 0.4
+	mat.scale_max = 0.8
+	mat.color = Color(0.3, 1.0, 0.4, 0.9)
+	var grad := Gradient.new()
+	grad.colors = [
+		Color(0.35, 1.0, 0.5, 0.95),
+		Color(0.35, 1.0, 0.5, 0.4),
+		Color(0.35, 1.0, 0.5, 0.0),
+	]
+	var grad_tex := GradientTexture1D.new()
+	grad_tex.gradient = grad
+	mat.color_ramp = grad_tex
+	_heal_particles.process_material = mat
+	add_child(_heal_particles)
+
+# --- BOSS / DUNGEON CHOICE ---
+func _is_current_boss(enemy_name: String) -> bool:
+	if current_dungeon_index == 0:
+		return enemy_name == "Goblin King"
+	elif current_dungeon_index == 1:
+		return enemy_name == "Lich"
+	elif current_dungeon_index == 2:
+		return enemy_name == "High King of Peaks"
+	elif current_dungeon_index == 3:
+		return enemy_name == "Orc Warlord"
+	elif current_dungeon_index == 4:
+		return enemy_name == "Dread Matriarch"
+	elif current_dungeon_index == 5:
+		return enemy_name == "Ancient Worldroot"
+	return false
+
+func _offer_dungeon_choice(boss_name: String) -> void:
+	if not dungeon_choice:
+		print("[BOSS] %s defeated, but no dialog present. Auto-switch to next dungeon." % boss_name)
+		_switch_to_next_dungeon()
+		return
+	dungeon_choice.title = "Dungeon Cleared!"
+	dungeon_choice.ok_button_text = "Go to next dungeon"
+	dungeon_choice.cancel_button_text = "Stay here"
+	dungeon_choice.dialog_text = "%s defeated!\nStay here and keep farming XP, or go to the next dungeon?" % boss_name
+	dungeon_choice.popup_centered()
+
+func _on_dungeon_choice_confirmed() -> void:
+	_switch_to_next_dungeon()
+
+func _on_dungeon_choice_canceled() -> void:
+	await _transition_to_next_enemy()
+	set_turn(Turn.PLAYER)
+
+func _switch_to_next_dungeon() -> void:
+	if current_dungeon_index == 0:
+		current_dungeon_index = 1
+		current_roster = UNDEAD_ENEMIES.duplicate(true)
+		dungeon_level = 1
+		enemies_defeated = 0
+
+		# zapisz jako odwiedzony
+		if not visited_dungeons.has(1):
+			visited_dungeons.append(1)
+
+		if lbl_log:
+			lbl_log.text = "Entering: Undead Crypt"
+
+		# zaktualizuj pasek „Current dungeon: …”
+		if lbl_dungeon_name:
+			lbl_dungeon_name.text = "Current dungeon: %s" % String(DUNGEONS[current_dungeon_index]["name"])
+
+		_apply_world_background_for_current_dungeon()
+		_request_spawn(_pick_enemy())
+		set_turn(Turn.PLAYER)
+	else:
+		# dalej nie używamy tego przejścia — od D2 decyduje _offer_branch_choice_after_boss()
+		if lbl_log:
+			lbl_log.text = "No further dungeons via linear path. Stay here."
+		_request_spawn(_pick_enemy())
+		set_turn(Turn.PLAYER)
+
+
+# --- Evolution UI ---
+func _show_evolution_choice() -> void:
+	if btn_attack:
+		btn_attack.disabled = true
+	var win := Window.new()
+	win.title = "Dwarf Evolution"
+	win.unresizable = true
+	win.size = Vector2i(520, 360)
+
+	var root := VBoxContainer.new()
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_theme_constant_override("separation", 16)
+
+	var head := Label.new()
+	head.text = "Choose your class (one-time evolution):"
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	head.add_theme_font_size_override("font_size", 22)
+	if DMG_FONT:
+		head.add_theme_font_override("font", DMG_FONT)
+	root.add_child(head)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(grid)
+
+	grid.add_child(_make_class_card(
+		"warrior",
+		"Warrior (+10 STR)",
+		"Iron master of the sword. Strong bonus to strength-based weapons."
+	))
+	grid.add_child(_make_class_card(
+		"assassin",
+		"Assassin (+10 AGI)",
+		"Fast and precise. Excels with agility-scaling weapons."
+	))
+	grid.add_child(_make_class_card(
+		"guardian",
+		"Guardian (+10 VIT)",
+		"Unbreakable defense. Greatly improved survivability."
+	))
+	grid.add_child(_make_class_card(
+		"barbarian",
+		"Barbarian (+10 CRIT)",
+		"Uncontrolled fury. Massive critical hit power."
+	))
+
+	win.add_child(root)
+
+	var layer := $CanvasLayer
+	if layer:
+		layer.add_child(win)
+	else:
+		add_child(win)
+	win.popup_centered()
+	win.show()
+	win.grab_focus()
+
+func _make_class_card(key: String, title: String, desc: String) -> Control:
+	var card := VBoxContainer.new()
+	card.add_theme_constant_override("separation", 6)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	var ltitle := Label.new()
+	ltitle.text = title
+	ltitle.add_theme_font_size_override("font_size", 20)
+	if DMG_FONT:
+		ltitle.add_theme_font_override("font", DMG_FONT)
+	card.add_child(ltitle)
+
+	var ldesc := Label.new()
+	ldesc.text = desc
+	ldesc.autowrap_mode = TextServer.AUTOWRAP_WORD
+	card.add_child(ldesc)
+
+	var btn := Button.new()
+	btn.text = "Select"
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.pressed.connect(Callable(self, "_on_class_picked").bind(key))
+	card.add_child(btn)
+
+	return card
+
+func _on_class_picked(class_key: String) -> void:
+	if has_evolved:
+		return
+
+	_apply_class_evolution(class_key)
+
+	# posprzątaj okna
+	for child in $CanvasLayer.get_children():
+		if child is Window:
+			child.queue_free()
+
+	if lbl_log:
+		lbl_log.text = "Evolution complete! You are now a " + class_key.capitalize() + "."
+
+	# upewnij się, że panel skilli istnieje i jest zaktualizowany
+	if skills_panel == null:
+		_create_skills_ui()
+	_update_skills_ui()
+
+	# przywróć Attack jeśli można
+	if turn == Turn.PLAYER and btn_attack and (not stats_panel or not stats_panel.visible):
+		btn_attack.disabled = false
+
+
+func _apply_class_evolution(key: String) -> void:
+	if has_evolved:
+		return
+
+	# premie do statów na ewolucji (jak było)
+	match key:
+		"warrior":
+			player.strength += 10
+		"assassin":
+			player.agility += 10
+		"guardian":
+			player.vitality += 10
+		"barbarian":
+			player.crit += 10
+		_:
+			push_warning("Unknown class key: %s" % key)
+
+	# zapamiętaj klasę
+	has_evolved = true
+	chosen_class = key
+
+	# nadaj aktywne/pasywne skille dla klasy (slot [2] + pasywka)
+	_grant_class_skills(key)
+
+	# odśwież UI statystyk i panel skilli
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+	_update_skills_ui()
+
+	# zamknij okno wyboru
+	for child in $CanvasLayer.get_children():
+		if child is Window:
+			child.queue_free()
+
+	# fajerwerki i komunikat
+	if lbl_log:
+		lbl_log.text = "Evolution complete! You are now a " + key.capitalize() + "."
+	_animate_class_change(key)
+	_post_evolution_breath()
+
+	# odblokuj atak jeśli to Twoja tura i nic innego nie blokuje
+	if turn == Turn.PLAYER and btn_attack and (not stats_panel or not stats_panel.visible):
+		btn_attack.disabled = false
+
+
+
+func _animate_class_change(class_key: String) -> void:
+	var tex_path: String = (CLASS_TEXTURES.get(class_key, "") as String)
+	var new_tex: Texture2D = null
+	if tex_path != "":
+		var loaded := load(tex_path)
+		if loaded is Texture2D:
+			new_tex = loaded
+
+	var p := GPUParticles2D.new()
+	p.one_shot = true
+	p.lifetime = 0.7
+	p.amount = 60
+	p.emitting = false
+	p.position = Vector2.ZERO
+	var pm := ParticleProcessMaterial.new()
+	pm.gravity = Vector3(0, 40, 0)
+	pm.initial_velocity_min = 140
+	pm.initial_velocity_max = 220
+	pm.angle_min = -35.0
+	pm.angle_max = 35.0
+	pm.scale_min = 0.35
+	pm.scale_max = 0.9
+	pm.color = Color(1.0, 0.9, 0.5, 1.0)
+	var grad := Gradient.new()
+	grad.colors = [
+		Color(1.0, 0.95, 0.6, 0.95),
+		Color(1.0, 0.85, 0.3, 0.5),
+		Color(1.0, 0.85, 0.3, 0.0),
+	]
+	var grad_tex := GradientTexture1D.new()
+	grad_tex.gradient = grad
+	pm.color_ramp = grad_tex
+	p.process_material = pm
+	player.add_child(p)
+
+	var flash := ColorRect.new()
+	flash.color = Color(1,1,1,0)
+	flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	flash.set_anchors_preset(Control.PRESET_FULL_RECT)
+	$CanvasLayer.add_child(flash)
+	flash.move_to_front()
+
+	var ring := GPUParticles2D.new()
+	ring.one_shot = true
+	ring.lifetime = 0.5
+	ring.amount = 36
+	ring.emitting = false
+	ring.position = Vector2.ZERO
+	var rm := ParticleProcessMaterial.new()
+	rm.gravity = Vector3(0, 0, 0)
+	rm.initial_velocity_min = 140
+	rm.initial_velocity_max = 220
+	rm.direction = Vector3(1, 0, 0)
+	rm.spread = 180.0
+	rm.scale_min = 0.25
+	rm.scale_max = 0.55
+	rm.color = Color(0.9, 0.95, 1.0, 1.0)
+	var rgrad := Gradient.new()
+	rgrad.colors = [
+		Color(0.9, 1.0, 1.0, 0.9),
+		Color(0.6, 0.8, 1.0, 0.4),
+		Color(0.6, 0.8, 1.0, 0.0),
+	]
+	var rtex := GradientTexture1D.new()
+	rtex.gradient = rgrad
+	rm.color_ramp = rtex
+	ring.process_material = rm
+	player.add_child(ring)
+
+	var start_scale: Vector2 = player.scale
+	var start_mod: Color = player.modulate
+	var tw := get_tree().create_tween()
+	tw.tween_property(player, "scale", start_scale * Vector2(1.12, 1.12), 0.10)
+	tw.parallel().tween_property(player, "modulate", Color(1.2, 1.2, 1.2, 1.0), 0.10).from(start_mod)
+	tw.tween_property(player, "scale", start_scale * Vector2(0.94, 0.94), 0.10)
+	tw.tween_property(player, "scale", start_scale * Vector2(1.00, 1.00), 0.10)
+
+	var twf := get_tree().create_tween()
+	twf.tween_property(flash, "modulate:a", 0.35, 0.06).from(0.0)
+	twf.tween_property(flash, "modulate:a", 0.0, 0.14)
+
+	p.emitting = true
+	ring.emitting = true
+	get_tree().create_timer(0.08).timeout.connect(func():
+		if new_tex: player.texture = new_tex
+	)
+	get_tree().create_timer(1.2).timeout.connect(func():
+		if is_instance_valid(p): p.queue_free()
+		if is_instance_valid(ring): ring.queue_free()
+		if is_instance_valid(flash): flash.queue_free()
+		if is_instance_valid(player):
+			player.modulate = start_mod
+			player.scale = start_scale
+	)
+
+func _post_evolution_breath() -> void:
+	var s: Vector2 = player.scale
+	var tw := get_tree().create_tween()
+	tw.tween_property(player, "scale", s * Vector2(1.03, 1.03), 0.10)
+	tw.tween_property(player, "scale", s, 0.12)
+
+# --- INVENTORY: testowe przedmioty ---
+# --- INVENTORY: start tylko z Rusty Sword (słaby), reszta puste ---
+func _load_permanent_items_into_inventory() -> void:
+	# Wyczyść bieżące inventory
+	for k in ["weapon", "armor", "helmet", "necklace"]:
+		inventory[k] = []
+ 
+	var loaded := 0
+ 
+	# 1) Permanenty z GameState.meta["permanent_chest"]
+	var chest: Dictionary = GameState.meta.get("permanent_chest", {})
+	for slot in ["weapon", "armor", "helmet", "necklace"]:
+		var arr: Array = chest.get(slot, [])
+		for it in arr:
+			if typeof(it) == TYPE_DICTIONARY:
+				var copy: Dictionary = it.duplicate(true)
+				copy["permanent"] = true
+				inventory[slot].append(copy)
+				loaded += 1
+ 
+	# 2) Itemy wzięte z domu (run["loadout"]) — kluczowy fix!
+	var loadout: Dictionary = GameState.run.get("loadout", {})
+	for slot in ["weapon", "armor", "helmet", "necklace"]:
+		var arr: Array = loadout.get(slot, [])
+		for it in arr:
+			if typeof(it) == TYPE_DICTIONARY:
+				var copy: Dictionary = it.duplicate(true)
+				copy["permanent"] = true
+				inventory[slot].append(copy)
+				loaded += 1
+ 
+	# Jeśli brak czegokolwiek — daj startowy miecz
+	if loaded == 0:
+		var rusty := {
+			"type": "weapon",
+			"name": "Rusty Sword",
+			"rarity": Rarity.COMMON,
+			"base": 10,
+			"scale": {"str": 0.7, "agi": 0.2}
+		}
+		inventory["weapon"].append(rusty)
+		_equip_item("weapon", 0)
+		print("[INVENTORY] First run — equipped Rusty Sword")
+	else:
+		print("[INVENTORY] Loaded %d item(s) from GameState." % loaded)
+		if not inventory["weapon"].is_empty():
+			_equip_item("weapon", 0)
+
+
+func _inventory_add_test_items() -> void:
+	# wyczyść wszystko, żeby nie startować z darmowymi itemami
+	inventory["weapon"].clear()
+	inventory["armor"].clear()
+	inventory["helmet"].clear()
+	inventory["necklace"].clear()
+
+	# bardzo słaby startowy miecz – tak, żeby pierwszy upgrade był wyraźny
+	var rusty := {
+		"type": "weapon",
+		"name": "Rusty Sword",
+		"rarity": Rarity.COMMON,
+		"base": 100,  # słaby dmg bazowy (testowe – zmień na 10 przed releasem)
+		"scale": {"str": 0.7, "agi": 0.2}  # niska skala
+	}
+	inventory["weapon"].append(rusty)
+	# załóż od razu
+	_equip_item("weapon", inventory["weapon"].size() - 1)
+
+
+# --- INVENTORY UI ---
+func _create_inventory_ui() -> void:
+	if inv_panel:
+		return
+
+	inv_panel = PanelContainer.new()
+	inv_panel.visible = false
+	inv_panel.size = Vector2(520, 420)
+
+	# wyśrodkowanie na ekranie
+	inv_panel.anchor_left = 0.5
+	inv_panel.anchor_top = 0.5
+	inv_panel.anchor_right = 0.5
+	inv_panel.anchor_bottom = 0.5
+	inv_panel.offset_left = -inv_panel.size.x / 2
+	inv_panel.offset_top = -inv_panel.size.y / 2
+	inv_panel.offset_right = inv_panel.size.x / 2
+	inv_panel.offset_bottom = inv_panel.size.y / 2
+
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 10)
+	inv_panel.add_child(root)
+
+	inv_tabs_label = Label.new()
+	inv_tabs_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	inv_tabs_label.add_theme_font_size_override("font_size", 20)
+	if DMG_FONT:
+		inv_tabs_label.add_theme_font_override("font", DMG_FONT)
+	root.add_child(inv_tabs_label)
+
+	# >>> Uwaga: inv_scroll jako ZMIENNA LOKALNA
+	var inv_scroll := ScrollContainer.new()
+	inv_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inv_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inv_scroll.focus_mode = Control.FOCUS_NONE
+	root.add_child(inv_scroll)
+
+	var compare := PanelContainer.new()
+	compare.name = "ComparePanel"
+	compare.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.add_child(compare)
+
+	var cmp_box := VBoxContainer.new()
+	cmp_box.name = "CmpBox"
+	cmp_box.add_theme_constant_override("separation", 4)
+	compare.add_child(cmp_box)
+
+	var cmp_title := Label.new()
+	cmp_title.text = "Compare"
+	if DMG_FONT:
+		cmp_title.add_theme_font_override("font", DMG_FONT)
+	cmp_title.add_theme_font_size_override("font_size", 16)
+	cmp_title.add_theme_color_override("font_color", UI_COL["accent"])
+	cmp_box.add_child(cmp_title)
+
+	var cmp_lines := Label.new()
+	cmp_lines.name = "CmpLines"
+	cmp_lines.text = "—"
+	cmp_box.add_child(cmp_lines)
+
+	inv_labels_container = VBoxContainer.new()
+	inv_labels_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inv_labels_container.add_theme_constant_override("separation", 4)
+	inv_scroll.add_child(inv_labels_container)
+
+	inv_equipped_label = Label.new()
+	inv_equipped_label.add_theme_font_size_override("font_size", 14)
+	root.add_child(inv_equipped_label)
+
+	inv_hint_label = Label.new()
+	inv_hint_label.text = "←/→ tabs • ↑/↓ move • Enter equip • I close"
+	inv_hint_label.add_theme_font_size_override("font_size", 12)
+	inv_hint_label.modulate = Color(0.9, 0.9, 0.9, 0.85)
+	root.add_child(inv_hint_label)
+
+	# --- overlay w tle (ciemne półprzezroczyste tło) ---
+	inv_overlay = ColorRect.new()
+	inv_overlay.color = Color(0, 0, 0, 0.55)
+	inv_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	inv_overlay.visible = false
+	inv_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	if $CanvasLayer and $CanvasLayer.has_node("UIRoot"):
+		$CanvasLayer/UIRoot.add_child(inv_overlay)
+		$CanvasLayer/UIRoot.add_child(inv_panel)
+		inv_panel.position = get_viewport_rect().size / 2 - inv_panel.size / 2
+	else:
+		add_child(inv_overlay)
+		add_child(inv_panel)
+
+	inv_overlay.move_to_front()
+	inv_panel.move_to_front()
+
+	# --- SKIN / STYL ---
+	_apply_frame(inv_panel)
+	_apply_tiled_bg(inv_panel)
+
+	var cmp_node := inv_panel.get_node_or_null("ComparePanel")
+	if cmp_node and cmp_node is PanelContainer:
+		_apply_frame(cmp_node)
+		_apply_tiled_bg(cmp_node)
+
+
+
+
+func _refresh_inventory_ui() -> void:
+	if not inv_panel or not inv_labels_container:
+		return
+
+	for child in inv_labels_container.get_children():
+		child.queue_free()
+
+	# klucze (spójne)
+	var tab_keys: Array[String] = ["weapon", "armor", "helmet", "necklace"]
+	var key_index: int = clamp(inv_tab_index, 0, tab_keys.size() - 1)
+	var key: String = tab_keys[key_index]
+
+	# nagłówek tabs
+	if inv_tabs_label:
+		inv_tabs_label.text = "Inventory – " + INV_TABS[key_index]
+
+	# pobierz pozycje
+	var items: Array = inventory.get(key, []) as Array
+	# ensure selection buffer size & ints
+	if inv_row_index_by_tab.size() < tab_keys.size():
+		inv_row_index_by_tab.resize(tab_keys.size())
+	for i in range(inv_row_index_by_tab.size()):
+		if typeof(inv_row_index_by_tab[i]) != TYPE_INT:
+			inv_row_index_by_tab[i] = 0
+	var sel_row: int = int(inv_row_index_by_tab[key_index])
+
+	if items.is_empty():
+		var l := Label.new()
+		l.text = "(no items)"
+		inv_labels_container.add_child(l)
+		inv_row_index_by_tab[key_index] = 0
+		if inv_equipped_label:
+			inv_equipped_label.text = "Equipped: " + _equip_name(key)
+		return
+	else:
+		sel_row = clamp(sel_row, 0, items.size() - 1)
+		inv_row_index_by_tab[key_index] = sel_row
+
+	for idx in items.size():
+		var it: Dictionary = items[idx]
+		var is_sel := (idx == sel_row)
+		var is_eq := _is_item_equipped(key, idx)
+		_add_inventory_row_card(inv_labels_container, it, idx, is_sel, is_eq)
+
+
+	if inv_equipped_label:
+		inv_equipped_label.text = "Equipped: " + _equip_name(key)
+	_apply_icons_to_inventory_list()
+	_apply_icons_to_inventory_list()
+	_scroll_inventory_to_selection() # <<< przewiń do zaznaczonego wiersza
+
+
+
+func _tab_key(tab: int) -> String:
+	match tab:
+		InvSlot.WEAPON:   return "weapon"
+		InvSlot.ARMOR:    return "armor"
+		InvSlot.HELMET:   return "helmet"
+		InvSlot.NECKLACE: return "necklace"
+		_:                return "weapon"
+
+func _inventory_item_line(it: Dictionary) -> String:
+	var t := str(it.get("type","?"))
+	var item_name := str(it.get("name","???"))
+	var line := item_name
+	match t:
+		"weapon":
+			var base := int(it.get("base",0))
+			var sc:Dictionary = it.get("scale", {})
+			var sstr := float(sc.get("str",0.0))
+			var sagi := float(sc.get("agi",0.0))
+			line = "%s  (base:%d | STRx%.1f AGIx%.1f)" % [item_name, base, sstr, sagi]
+		"armor":
+			var dr := int(round(100.0 * float(it.get("dr",0.0))))
+			line = "%s  (DR:%d%%)" % [item_name, dr]
+		"helmet":
+			var hp := int(it.get("hp_bonus",0))
+			line = "%s  (+%d HP)" % [item_name, hp]
+		"necklace":
+			var cb := int(round(100.0*float(it.get("crit_bonus",0.0))))
+			line = "%s  (+%d%% crit mult)" % [item_name, cb]
+		_:
+			line = item_name
+
+	# dopnij sufiks z bonusem do statów jeśli istnieje
+	if it.has("bonus_stat") and int(it.get("bonus_value",0)) > 0:
+		var s := String(it["bonus_stat"]).to_upper()
+		var v := int(it["bonus_value"])
+		line += "  [%s +%d]" % [s, v]
+
+	return line
+
+
+func _is_item_equipped(key:String, idx:int) -> bool:
+	match key:
+		"weapon":
+			var it:Dictionary = inventory["weapon"][idx]
+			return weapon.get("name","") == it.get("name","")
+		"armor":
+			return (not equipped_armor.is_empty()) and (equipped_armor.get("name","") == inventory["armor"][idx].get("name",""))
+		"helmet":
+			return (not equipped_helmet.is_empty()) and (equipped_helmet.get("name","") == inventory["helmet"][idx].get("name",""))
+		"necklace":
+			return (not equipped_necklace.is_empty()) and (equipped_necklace.get("name","") == inventory["necklace"][idx].get("name",""))
+		_:
+			return false
+
+func _equip_name(key:String) -> String:
+	match key:
+		"weapon":
+			return str(weapon.get("name","—"))
+		"armor":
+			return equipped_armor.get("name","—")
+		"helmet":
+			return equipped_helmet.get("name","—")
+		"necklace":
+			return equipped_necklace.get("name","—")
+		_:
+			return "—"
+
+func _equip_item(key:String, idx:int) -> void:
+	var items: Array = inventory.get(key, [])
+	if idx < 0 or idx >= items.size():
+		return
+	var it: Dictionary = items[idx]
+
+	# 1) zdejmij bonus z aktualnie założonego itemu w tym slocie
+	_apply_stat_bonus_for_slot(key, false)
+
+	match key:
+		"weapon":
+			# przepisz do globalnego "weapon" + przenieś ewentualne bonusowe pola
+			weapon = {
+				"type": "weapon",
+				"name": it.get("name","???"),
+				"base": int(it.get("base", 10)),
+				"scale": it.get("scale", {"str":1.0,"agi":0.0}),
+				"bonus_stat": it.get("bonus_stat", ""),
+				"bonus_value": int(it.get("bonus_value", 0))
+			}
+		"armor":
+			equipped_armor = it
+		"helmet":
+			var old_hp: int = int(equipped_helmet.get("hp_bonus", 0))
+			var new_hp: int = int(it.get("hp_bonus", 0))
+			var delta: int = new_hp - old_hp
+			equipped_helmet = it
+			if delta != 0:
+				player.max_hp = max(1, player.max_hp + delta)
+				player.hp = clamp(player.hp, 0, player.max_hp)
+				player.emit_signal("hp_changed", player.hp, player.max_hp)
+		"necklace":
+			equipped_necklace = it
+		_:
+			pass
+
+	# 2) nałóż bonus z nowo założonego itemu w tym slocie
+	_apply_stat_bonus_for_slot(key, true)
+
+	_update_labels()
+	_refresh_inventory_ui()
+
+
+
+func _open_inventory() -> void:
+	inventory_open = true
+	if btn_attack:
+		btn_attack.disabled = true
+
+	# overlay fade-in
+	if inv_overlay:
+		inv_overlay.visible = true
+		inv_overlay.modulate.a = 0.0
+		inv_overlay.move_to_front()
+		var tw_bg := get_tree().create_tween()
+		tw_bg.tween_property(inv_overlay, "modulate:a", 1.0, 0.12)
+
+	# panel fade-in (pop-in)
+	inv_panel.visible = true
+	inv_panel.modulate = Color(1, 1, 1, 0.0)
+	inv_panel.scale = Vector2(1.06, 1.06)
+	inv_panel.move_to_front()
+	_refresh_inventory_ui()
+
+	var tw := get_tree().create_tween()
+	tw.tween_property(inv_panel, "modulate:a", 1.0, 0.12).from(0.0)
+	tw.parallel().tween_property(inv_panel, "scale", Vector2(1, 1), 0.12)
+
+func _close_inventory() -> void:
+	if not inventory_open:
+		return
+	inventory_open = false
+
+	# panel fade-out
+	var tw := get_tree().create_tween()
+	tw.tween_property(inv_panel, "modulate:a", 0.0, 0.10).from(inv_panel.modulate.a)
+	tw.parallel().tween_property(inv_panel, "scale", Vector2(1.02, 1.02), 0.10)
+	tw.finished.connect(func():
+		inv_panel.visible = false
+	)
+
+	# overlay fade-out
+	if inv_overlay and inv_overlay.visible:
+		var tw_bg := get_tree().create_tween()
+		tw_bg.tween_property(inv_overlay, "modulate:a", 0.0, 0.10).from(inv_overlay.modulate.a)
+		tw_bg.finished.connect(func():
+			inv_overlay.visible = false
+		)
+
+	if turn == Turn.PLAYER and btn_attack and (not stats_panel or not stats_panel.visible):
+		btn_attack.disabled = false
+
+func _inventory_move_selection(delta_rows: int) -> void:
+	var tab_keys: Array[String] = ["weapon", "armor", "helmet", "necklace"]
+	var key_index: int = clamp(inv_tab_index, 0, tab_keys.size() - 1)
+	var key: String = tab_keys[key_index]
+	var items: Array = inventory.get(key, []) as Array
+	if items.is_empty():
+		return
+	var row: int = int(inv_row_index_by_tab[key_index])
+	row = clamp(row + delta_rows, 0, items.size() - 1)
+	inv_row_index_by_tab[key_index] = row
+	_refresh_inventory_ui()
+
+func _equip_selected_item() -> void:
+	var tab_keys: Array[String] = ["weapon", "armor", "helmet", "necklace"]
+	var key_index: int = clamp(inv_tab_index, 0, tab_keys.size() - 1)
+	var key: String = tab_keys[key_index]
+	var items: Array = inventory.get(key, []) as Array
+	if items.is_empty():
+		return
+	var row: int = int(inv_row_index_by_tab[key_index])
+	row = clamp(row, 0, items.size() - 1)
+	_equip_item(key, row)
+
+func _rarity_name(r:int) -> String:
+	match r:
+		Rarity.COMMON:    return "COMMON"
+		Rarity.RARE:      return "RARE"
+		Rarity.EPIC:      return "EPIC"
+		Rarity.LEGENDARY: return "LEGENDARY"
+		_:                return "?"
+
+func _add_item_to_inventory(it:Dictionary) -> Dictionary:
+	var t := str(it.get("type",""))
+	match t:
+		"weapon":
+			inventory["weapon"].append(it)
+			return {"key":"weapon","index":inventory["weapon"].size()-1}
+		"armor":
+			inventory["armor"].append(it)
+			return {"key":"armor","index":inventory["armor"].size()-1}
+		"helmet":
+			inventory["helmet"].append(it)
+			return {"key":"helmet","index":inventory["helmet"].size()-1}
+		"necklace":
+			inventory["necklace"].append(it)
+			return {"key":"necklace","index":inventory["necklace"].size()-1}
+		_:
+			return {}
+
+func _show_loot_popup(item:Dictionary, key:String, idx:int) -> void:
+	# proste okno z kolorem rzadkości i przyciskiem "Equip now"
+	var win := Window.new()
+	win.title = "You found an item!"
+	win.unresizable = true
+	win.size = Vector2i(440, 220)
+
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 10)
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	win.add_child(root)
+
+	var headline := Label.new()
+	var rar:int = int(item.get("rarity", Rarity.COMMON))
+	headline.text = "%s  (%s)" % [str(item.get("name","???")), _rarity_name(rar)]
+	headline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	headline.add_theme_font_size_override("font_size", 20)
+	headline.modulate = RARITY_COLORS.get(rar, Color.WHITE)
+	if DMG_FONT: headline.add_theme_font_override("font", DMG_FONT)
+	root.add_child(headline)
+
+	var stats := Label.new()
+	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	stats.text = _inventory_item_line(item)
+	root.add_child(stats)
+
+	var btns := HBoxContainer.new()
+	btns.add_theme_constant_override("separation", 10)
+	btns.alignment = BoxContainer.ALIGNMENT_CENTER
+	root.add_child(btns)
+
+	var equip_btn := Button.new()
+	equip_btn.text = "Equip now"
+	btns.add_child(equip_btn)
+
+	var close_btn := Button.new()
+	close_btn.text = "Close"
+	btns.add_child(close_btn)
+
+	# logika
+	equip_btn.pressed.connect(func():
+		_equip_item(key, idx)
+		if is_instance_valid(win): win.queue_free()
+	)
+	close_btn.pressed.connect(func():
+		if is_instance_valid(win): win.queue_free()
+	)
+
+	# wstrzymujemy akcję, żeby gracz zauważył loot
+	if btn_attack: btn_attack.disabled = true
+	if $CanvasLayer:
+		$CanvasLayer.add_child(win)
+	else:
+		add_child(win)
+	win.popup_centered()
+	win.grab_focus()
+
+	# po zamknięciu przywróć Attack (jeśli to tura gracza i nic innego nie blokuje)
+	win.visibility_changed.connect(func():
+		if not win.visible and turn == Turn.PLAYER and btn_attack and (not stats_panel or not stats_panel.visible) and not inventory_open:
+			btn_attack.disabled = false
+	)
+
+
+func _roll_enemy_loot_drop(enemy_data: Dictionary) -> void:
+	if enemy_data.is_empty(): return
+	var diff := int(enemy_data.get("difficulty", 1))
+	diff = clamp(diff, 1, 5)
+
+	var base_chance := float(DROP_CHANCE_BY_DIFF.get(diff, 0.15))
+	# bonus za „bossowate” nazwy
+	var nm := str(enemy_data.get("name","")).to_lower()
+	if nm.find("king") != -1 or nm.find("lich") != -1:
+		base_chance += 0.08
+
+	if randf() > base_chance:
+		return
+
+	# slot (faworyzuj broń/pancerz)
+	var slot_roll := randi() % 100
+	var slot_key := ""
+	if slot_roll < 40:
+		slot_key = "weapon"
+	elif slot_roll < 75:
+		slot_key = "armor"
+	elif slot_roll < 90:
+		slot_key = "helmet"
+	else:
+		slot_key = "necklace"
+
+
+	# rarity → item → dodaj do ekwipunku
+	var rarity := _weighted_rarity_by_diff(diff)
+	var item := _gen_random_item(slot_key, rarity, diff)
+	var ref := _add_item_to_inventory(item)
+
+	# log + zielony popup tekstowy (jak było) + NOWE okienko
+	if lbl_log:
+		lbl_log.text = "Loot: %s (%s)" % [str(item.get("name","???")), _rarity_name(int(item.get("rarity", Rarity.COMMON)))]
+	show_damage_popup(player, str(item.get("name","???")), "heal")
+
+	_refresh_inventory_ui()
+
+	# popup z przyciskiem "Equip now"
+	if not ref.is_empty():
+		_show_loot_popup(item, String(ref["key"]), int(ref["index"]))
+
+
+
+# Sklejenie sensownych widełek dla bazowego dmg wg rzadkości
+func _weapon_base_minmax_for_rarity(r:int) -> Vector2i:
+	match r:
+		Rarity.COMMON:    return Vector2i(8, 16)
+		Rarity.RARE:      return Vector2i(14, 20)
+		Rarity.EPIC:      return Vector2i(18, 30)
+		Rarity.LEGENDARY: return Vector2i(30, 100)
+		_:                return Vector2i(8, 16)
+
+func _weighted_rarity_by_diff(diff:int) -> int:
+	# DEV: wymuszony drop z panelu dev
+	if _dev_forced_rarity >= 0:
+		return _dev_forced_rarity
+	var weights: Dictionary = RARITY_WEIGHTS_BY_DIFF.get(diff, RARITY_WEIGHTS_BY_DIFF[1])
+	var total := 0
+	for r in [Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY]:
+		total += int(weights.get(r, 0))
+	if total <= 0:
+		return Rarity.COMMON
+	var pick := randi() % total
+	var acc := 0
+	for r in [Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY]:
+		acc += int(weights.get(r,0))
+		if pick < acc:
+			return r
+	return Rarity.COMMON
+
+func _gen_random_item(slot_key:String, rarity:int, diff:int) -> Dictionary:
+	# DUŻO większe pule nazw
+	var base_names: Dictionary = {
+		"weapon": [
+			"Rusty","Iron","Steel","Knight","Champion","Sun","Void","Ancient","Mythril","Dwarven","Runed","Oaken",
+			"Storm","Blood","Moon","Star","Kingsguard","Vanguard","Highborn","Eclipse","Grim","Ashen","Sable",
+			"Gilded","Dragon","Titan","Obsidian","Silver","Auric","Frost"
+		],
+		"armor": [
+			"Leather","Chain","Scale","Knight","Dragon","Aegis","Titan","Celestial","Warden","Sentinel","Battlemage",
+			"Runed","Vanguard","Sunguard","Stalwart","Bone","Grave","Ironbark","Stormplate","Lionheart","Highguard",
+			"Thorn","Glacier","Ember","Dread","Ward","Oath","Kingsguard","Bloodforged","Eclipse"
+		],
+		"helmet": [
+			"Cap","Hood","Helm","Visor","Crown","Mask","Greathelm","Halo","Barbute","Sallet","Basinet","Warhood",
+			"Skullcap","Kite","Phoenix","Dragon","Wolf","Bear","Lion","Warden","Runed","Aegis","Gale","Dread",
+			"Griffon","Raven","Owl","Auric","Iron","Frost"
+		],
+		"necklace": [
+			"Beads","Charm","Talisman","Pendant","Amulet","Sigil","Relic","Emblem","Icon","Medallion","Torque","Locket",
+			"Seal","Focus","Glimmer","Runestone","Sunshard","Moondrop","Aether","Spark","Halo","Glyph","Bond","Heart",
+			"Starshard","Dawnstone","Nightstone","Spirit","Totem","Crest"
+		]
+	}
+
+	var suffix_by_rar: Dictionary = {
+		Rarity.COMMON:    ["","of the Field","of the Guard","of the Pawn","of the Footman"],
+		Rarity.RARE:      ["of Swiftness","of the Wolf","of the Oak","of Sparks","of the Gale","of the Stallion"],
+		Rarity.EPIC:      ["of Dawn","of the Storm","of Kings","of Nightfall","of the Colossus","of the Vanguard"],
+		Rarity.LEGENDARY: ["of Eternity","of the Sun","of the Ancients","of True North","of the First Forge"]
+	}
+
+	# delikatny wzrost mocy wraz z trudnością (łagodny, żeby balans nie odlatywał)
+	var pow_mult: float = 1.0 + 0.06 * float(diff - 1)  # 6% / poziom trudności
+
+	# Nazwa
+	var names_arr: Array = base_names.get(slot_key, ["Old"])
+	var core: String = str(names_arr[randi() % names_arr.size()])
+	var suf_arr: Array = suffix_by_rar.get(rarity, [""])
+	var suf: String = str(suf_arr[randi() % suf_arr.size()])
+
+	var item_name: String = ""
+	match slot_key:
+		"weapon":
+			var forms := ["Sword","Axe","Dagger","Mace","Spear","Hammer","Blade","Saber","Crossbow","Bow"]
+			item_name = "%s %s %s" % [core, forms[randi()%forms.size()], suf]
+		"armor":
+			var forms2 := ["Vest","Mail","Cuirass","Plates","Hauberk","Breastplate","Carapace","Harness"]
+			item_name = "%s %s %s" % [core, forms2[randi()%forms2.size()], suf]
+		"helmet":
+			item_name = "%s %s %s" % [core, "Helm", suf]
+		"necklace":
+			item_name = "%s %s" % [core, "Talisman"]
+		_:
+			item_name = core
+
+	# Statystyki – BALANS
+	match slot_key:
+		"weapon":
+			# bazę ograniczamy widełkami dla rzadkości, a następnie lekko skalujemy trudnością
+			var mm: Vector2i = _weapon_base_minmax_for_rarity(rarity)     # Vector2i(min, max)
+			var base0: float = lerpf(float(mm.x), float(mm.y), randf())   # los w widełkach rzadkości
+			var base: int = int(round(base0 * pow_mult))                  # lekko rośnie z diff (6%/lvl)
+
+			# skalowania STR/AGI – sumarycznie ~1.2–1.6, żeby dmg nie eksplodował
+			var str_scale: float = randf_range(0.4, 1.2)
+			var agi_scale: float = randf_range(0.0, 1.0)
+			var sum: float = str_scale + agi_scale
+			if sum < 1.2:
+				var need: float = 1.2 - sum
+				str_scale += need * randf()
+				agi_scale += need * (1.0 - randf())
+			elif sum > 1.6:
+				var cut: float = sum - 1.6
+				str_scale -= cut * randf()
+				agi_scale -= cut * (1.0 - randf())
+
+			# zaokrąglamy do 0.1 dla estetyki
+			str_scale = snappedf(str_scale, 0.1)
+			agi_scale = snappedf(agi_scale, 0.1)
+
+			var item: Dictionary = {
+				"type":"weapon","name":item_name,"rarity":rarity,
+				"base": base,
+				"scale": {"str": str_scale, "agi": agi_scale}
+			}
+			var b: Dictionary = _roll_bonus_for_rarity(rarity)
+			if not b.is_empty():
+				item["bonus_stat"] = b["stat"]
+				item["bonus_value"] = int(b["value"])
+			return item
+
+		"armor":
+			# DR (reduction) 5–35%, rośnie delikatnie z diff + rare
+			var dr_base: float = clamp(0.05 + 0.025 * float(diff), 0.05, 0.30)
+			var rare_boost: float = 0.0
+			match rarity:
+				Rarity.RARE:
+					rare_boost = 0.02
+				Rarity.EPIC:
+					rare_boost = 0.05
+				Rarity.LEGENDARY:
+					rare_boost = 0.08
+			var dr: float = clamp(dr_base + rare_boost, 0.05, 0.35)
+			dr = snappedf(dr, 0.01)
+
+			var item2: Dictionary = {
+				"type":"armor","name":item_name,"rarity":rarity,
+				"dr": dr
+			}
+			var b2: Dictionary = _roll_bonus_for_rarity(rarity)
+			if not b2.is_empty():
+				item2["bonus_stat"] = b2["stat"]
+				item2["bonus_value"] = int(b2["value"])
+			return item2
+
+		"helmet":
+			# HP bonus – łagodnie z diff i rare
+			var hp_base: float = 6.0 + 4.0 * float(diff)
+			var rare_mult: float = 1.0
+			match rarity:
+				Rarity.RARE:
+					rare_mult = 1.15
+				Rarity.EPIC:
+					rare_mult = 1.32
+				Rarity.LEGENDARY:
+					rare_mult = 1.55
+			var hp: int = int(round(hp_base * rare_mult))
+
+			var item3: Dictionary = {
+				"type":"helmet","name":item_name,"rarity":rarity,
+				"hp_bonus": hp
+			}
+			var b3: Dictionary = _roll_bonus_for_rarity(rarity)
+			if not b3.is_empty():
+				item3["bonus_stat"] = b3["stat"]
+				item3["bonus_value"] = int(b3["value"])
+			return item3
+
+		"necklace":
+			# bonus do mnożnika kryta – skromny, ale odczuwalny
+			var critb: float = (0.02 + 0.015 * float(diff))
+			var rare_mult2: float = 1.0
+			match rarity:
+				Rarity.RARE:
+					rare_mult2 = 1.15
+				Rarity.EPIC:
+					rare_mult2 = 1.35
+				Rarity.LEGENDARY:
+					rare_mult2 = 1.60
+			critb = snappedf(critb * rare_mult2, 0.01)
+
+			var item4: Dictionary = {
+				"type":"necklace","name":item_name,"rarity":rarity,
+				"crit_bonus": critb
+			}
+			var b4: Dictionary = _roll_bonus_for_rarity(rarity)
+			if not b4.is_empty():
+				item4["bonus_stat"] = b4["stat"]
+				item4["bonus_value"] = int(b4["value"])
+			return item4
+
+		_:
+			return {"type":"misc","name":"Shiny Pebble","rarity":Rarity.COMMON}
+
+
+func _style_inventory_ui() -> void:
+	if inv_panel:
+		var sb := _make_stylebox(UI_COL["panel"], UI_COL["border"], 12, 2)
+		inv_panel.add_theme_stylebox_override("panel", sb)
+
+	if inv_tabs_label:
+		inv_tabs_label.add_theme_color_override("font_color", UI_COL["accent"])
+		inv_tabs_label.add_theme_font_size_override("font_size", 22)
+		if DMG_FONT: inv_tabs_label.add_theme_font_override("font", DMG_FONT)
+
+	if inv_equipped_label:
+		inv_equipped_label.add_theme_color_override("font_color", UI_COL["text_dim"])
+
+	if inv_hint_label:
+		inv_hint_label.add_theme_color_override("font_color", Color(0.85,0.85,0.9,0.7))
+
+func _add_inventory_row_card(parent: VBoxContainer, it: Dictionary, _idx: int, selected: bool, equipped: bool) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.set_meta("selected", selected) # <<< znacznik do przewijania
+
+	# panel wiersza jako „slot”
+	var bg := PanelContainer.new()
+	bg.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	# styl slotu (jeśli masz helpery – OK; jeśli nie, zostanie domyślne)
+	var hovered := false
+	var rar: int = int(it.get("rarity", Rarity.COMMON))
+	if has_method("_slot_style_for"):
+		var slot_style := _slot_style_for(rar, selected, hovered)
+		if slot_style:
+			bg.add_theme_stylebox_override("panel", slot_style)
+
+	# wewnętrzny layout
+	var inner := HBoxContainer.new()
+	inner.add_theme_constant_override("separation", 8)
+	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	# pasek rzadkości
+	var strip := ColorRect.new()
+	strip.color = _rarity_strip_color(rar)
+	strip.custom_minimum_size = Vector2(4, 28)
+	inner.add_child(strip)
+
+	# IKONA (korzysta z Twojej działającej _icon_for_item)
+	if has_method("_icon_for_item"):
+		var icon_tex := _icon_for_item(it)
+		if icon_tex != null:
+			var icon := TextureRect.new()
+			icon.name = "ItemIcon"
+			icon.texture = icon_tex
+			icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			icon.custom_minimum_size = Vector2(24, 24)
+			icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			inner.add_child(icon)
+
+	# nazwa + szczegóły
+	var vtxt := VBoxContainer.new()
+	vtxt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	# --- LINIA Z NAZWĄ + BADGE PERMANENT ---
+	var name_line := HBoxContainer.new()
+	name_line.add_theme_constant_override("separation", 6)
+	name_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var name_lbl := Label.new()
+	name_lbl.text = str(it.get("name","???"))
+	if DMG_FONT:
+		name_lbl.add_theme_font_override("font", DMG_FONT)
+	name_lbl.add_theme_font_size_override("font_size", 16)
+	name_lbl.add_theme_color_override("font_color", Color(1,1,1,1))
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_line.add_child(name_lbl)
+
+	# badge PERMANENT (tylko gdy it.permanent == true)
+	if bool(it.get("permanent", false)):
+		var per_panel := PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.18, 0.32, 0.12, 0.95)
+		sb.border_color = Color(0.45, 0.80, 0.35, 1.0)
+		# zamiast border_width_all:
+		sb.border_width_left = 1
+		sb.border_width_right = 1
+		sb.border_width_top = 1
+		sb.border_width_bottom = 1
+		sb.corner_radius_top_left = 6
+		sb.corner_radius_top_right = 6
+		sb.corner_radius_bottom_left = 6
+		sb.corner_radius_bottom_right = 6
+		per_panel.add_theme_stylebox_override("panel", sb)
+		per_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+		var per_margin := MarginContainer.new()
+		per_margin.add_theme_constant_override("margin_left", 6)
+		per_margin.add_theme_constant_override("margin_right", 6)
+		per_margin.add_theme_constant_override("margin_top", 2)
+		per_margin.add_theme_constant_override("margin_bottom", 2)
+
+		var per_lbl := Label.new()
+		per_lbl.text = "PERMANENT"
+		per_lbl.add_theme_font_size_override("font_size", 11)
+		per_lbl.add_theme_color_override("font_color", Color(0.92,1.0,0.92,1.0))
+		per_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		per_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		per_margin.add_child(per_lbl)
+		per_panel.add_child(per_margin)
+
+		name_line.add_child(per_panel)
+
+
+	vtxt.add_child(name_line)
+
+	# druga linia – Twoje istniejące szczegóły
+	var det := Label.new()
+	det.text = _inventory_item_line(it)
+	det.add_theme_color_override("font_color", Color(0.9,0.9,0.95,0.8))
+	vtxt.add_child(det)
+
+	inner.add_child(vtxt)
+
+	# plakietka EQUIPPED (zostawiam jak było)
+	if equipped:
+		var badge := Label.new()
+		badge.text = "[EQUIPPED]"
+		badge.add_theme_font_size_override("font_size", 12)
+		badge.add_theme_color_override("font_color", UI_COL["equip_badge"])
+		inner.add_child(badge)
+
+	# wskaźnik wyboru (zostawiam jak było)
+	if selected:
+		var sel := Label.new()
+		sel.text = "▶"
+		sel.add_theme_font_size_override("font_size", 16)
+		sel.add_theme_color_override("font_color", UI_COL["accent"])
+		inner.add_child(sel)
+
+	bg.add_child(inner)
+	row.add_child(bg)
+	parent.add_child(row)
+
+
+
+func _style_stats_panel() -> void:
+	if stats_panel:
+		var sb := _make_stylebox(UI_COL["panel"], UI_COL["border"], 12, 2)
+		stats_panel.add_theme_stylebox_override("panel", sb)
+
+	if lbl_stats_header:
+		lbl_stats_header.add_theme_color_override("font_color", UI_COL["accent"])
+		lbl_stats_header.add_theme_font_size_override("font_size", 24)
+		if DMG_FONT: lbl_stats_header.add_theme_font_override("font", DMG_FONT)
+
+	for l in [lbl_str, lbl_agi, lbl_vit, lbl_crit, lbl_points]:
+		if l:
+			l.add_theme_color_override("font_color", UI_COL["text_dim"])
+
+	for b in [btn_str_plus, btn_agi_plus, btn_vit_plus, btn_crit_plus, btn_stats_close]:
+		if b:
+			b.add_theme_color_override("font_color", Color(0.95,0.95,0.98))
+			b.add_theme_color_override("font_pressed_color", UI_COL["accent"])
+			b.add_theme_font_size_override("font_size", 18)
+
+func _rand_bonus_stat() -> String:
+	return BONUS_STATS[randi() % BONUS_STATS.size()]
+
+func _roll_bonus_for_rarity(rarity:int) -> Dictionary:
+	match rarity:
+		Rarity.COMMON:
+			return {}
+		Rarity.RARE:
+			if randf() <= BONUS_CHANCE_RARE:
+				return {"stat":"str","value":1} if (randi() % 2 == 0) else {"stat":_rand_bonus_stat(), "value":1}
+			return {}
+		Rarity.EPIC:
+			return {"stat": _rand_bonus_stat(), "value": randi_range(2, 3)}
+		Rarity.LEGENDARY:
+			return {"stat": _rand_bonus_stat(), "value": randi_range(3, 8)}
+		_:
+			return {}
+
+func _get_equipped_item_for_slot(key:String) -> Dictionary:
+	match key:
+		"weapon":
+			# weapon to u Ciebie luźny słownik – zwracamy go
+			return weapon
+		"armor":
+			return equipped_armor
+		"helmet":
+			return equipped_helmet
+		"necklace":
+			return equipped_necklace
+		_:
+			return {}
+
+func _apply_stat_bonus_for_slot(key:String, apply:bool) -> void:
+	var it := _get_equipped_item_for_slot(key)
+	if it.is_empty():
+		return
+	var stat := String(it.get("bonus_stat",""))
+	var val  := int(it.get("bonus_value", 0))
+	if stat == "" or val <= 0:
+		return
+	var delta := val if apply else -val
+	match stat:
+		"str":
+			player.strength += delta
+		"agi":
+			player.agility  += delta
+		"vit":
+			player.vitality += delta
+		"crit":
+			player.crit     += delta
+		_:
+			pass
+	# odśwież UI statystyk po zmianie
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+
+func _create_skills_ui() -> void:
+	if skills_panel:
+		return
+
+	# Panel
+	skills_panel = PanelContainer.new()
+	skills_panel.name = "SkillsPanel"
+	skills_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	# Styl
+	var sb := _make_stylebox(UI_COL["panel"], UI_COL["border"], 12, 2)
+	skills_panel.add_theme_stylebox_override("panel", sb)
+
+	# Pozycjonowanie: dół-środek
+	skills_panel.anchor_left = 0.5
+	skills_panel.anchor_right = 0.5
+	skills_panel.anchor_top = 1.0
+	skills_panel.anchor_bottom = 1.0
+	skills_panel.offset_left = -220
+	skills_panel.offset_right = 220
+	skills_panel.offset_top = -84
+	skills_panel.offset_bottom = -16
+	_ensure_skills_bg()
+
+
+	# Layout
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 6)
+	skills_panel.add_child(root)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	root.add_child(row)
+
+	# Slot [1]
+	lbl_skill1 = Button.new()
+	lbl_skill1.text = "[1] —"
+	lbl_skill1.focus_mode = Control.FOCUS_NONE
+	lbl_skill1.disabled = false
+	lbl_skill1.custom_minimum_size = Vector2(190, 36)
+	lbl_skill1.pressed.connect(func(): _try_use_skill(1))
+	row.add_child(lbl_skill1)
+
+	# Slot [2] (ukryty, jeśli brak skilla)
+	lbl_skill2 = Button.new()
+	lbl_skill2.text = "[2] —"
+	lbl_skill2.focus_mode = Control.FOCUS_NONE
+	lbl_skill2.disabled = true
+	lbl_skill2.visible = false
+	lbl_skill2.custom_minimum_size = Vector2(190, 36)
+	lbl_skill2.pressed.connect(func(): _try_use_skill(2))
+	row.add_child(lbl_skill2)
+	
+		# po dodaniu lbl_skill1 i lbl_skill2:
+	if lbl_skill1:
+		lbl_skill1.expand_icon = false
+		lbl_skill1.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		lbl_skill1.alignment = HORIZONTAL_ALIGNMENT_LEFT
+
+	if lbl_skill2:
+		lbl_skill2.expand_icon = false
+		lbl_skill2.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		lbl_skill2.alignment = HORIZONTAL_ALIGNMENT_LEFT
+
+	# PASSIVE label pod przyciskami
+	var passive_lbl := Label.new()
+	passive_lbl.name = "PassiveLabel"
+	passive_lbl.text = ""
+	passive_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	passive_lbl.visible = false
+	root.add_child(passive_lbl)
+	skills_passive_label = passive_lbl
+
+	# Dodanie do UI
+	if $CanvasLayer:
+		$CanvasLayer.add_child(skills_panel)
+	else:
+		add_child(skills_panel)
+
+	# Odśwież stan
+	_update_skills_ui()
+
+
+
+
+
+func _update_skills_ui() -> void:
+	if not skills_panel:
+		return
+
+	# --- Slot [1] ---
+	var name1 := "—"
+	var cd1 := 0
+	if skills.has(1):
+		name1 = String(skills[1].get("name","—"))
+		cd1 = int(skill_cooldowns.get(1, 0))
+	if lbl_skill1:
+		lbl_skill1.text = "[1] %s%s" % [
+			name1,
+			"  (CD:%d)" % cd1 if cd1 > 0 else ""
+		]
+		lbl_skill1.disabled = (cd1 > 0 or not skills.has(1))
+
+	# --- Slot [2] (pokazuj tylko, jeśli skill istnieje) ---
+	var has2 := skills.has(2)
+	var name2 := ""
+	var cd2 := 0
+	if has2:
+		name2 = String(skills[2].get("name","—"))
+		cd2 = int(skill_cooldowns.get(2, 0))
+
+	if lbl_skill2:
+		lbl_skill2.visible = has2
+		if has2:
+			lbl_skill2.text = "[2] %s%s" % [
+				name2,
+				"  (CD:%d)" % cd2 if cd2 > 0 else ""
+			]
+			lbl_skill2.disabled = (cd2 > 0)
+
+	# --- PASSIVE opis pod spodem (po wybraniu klasy) ---
+	var passive_lbl := skills_passive_label
+	if passive_lbl == null:
+		# awaryjnie spróbuj znaleźć rekurencyjnie (np. po przeładowaniu UI)
+		passive_lbl = skills_panel.find_child("PassiveLabel", true, false) as Label
+		skills_passive_label = passive_lbl
+	if passive_lbl:
+		var ptxt := _current_passive_description()
+		passive_lbl.text = ptxt
+		passive_lbl.visible = (ptxt != "")
+
+
+	# Upewnij się, że panel jest widoczny
+	skills_panel.visible = true
+	_refresh_skill_icons()
+
+
+
+
+
+func _tick_skill_cooldowns() -> void:
+	# co akcję redukuj wszystkie CD o 1, ale nie poniżej 0
+	for k in skill_cooldowns.keys():
+		var v: int = int(skill_cooldowns[k])
+		if v > 0:
+			skill_cooldowns[k] = v - 1
+	_update_skills_ui()
+
+
+func _try_use_skill(slot:int) -> void:
+	if resolving_turn: return
+	if turn != Turn.PLAYER: return
+	if not player.is_alive() or not enemy.is_alive(): return
+	if not skills.has(slot): return
+
+	var cd: int = int(skill_cooldowns.get(slot, 0))
+	if cd > 0:
+		if lbl_log:
+			lbl_log.text = "%s is on cooldown (%d turns)." % [String(skills[slot].get("name","Skill")), cd]
+		return
+
+	var skey := String(skills[slot].get("key",""))
+	match skey:
+		"basic_strike":
+			await _skill_basic_strike(slot)
+		"power_strike":
+			await _skill_power_strike(slot)
+		"fury":
+			await _skill_fury(slot)
+		"quick_slash":
+			await _skill_quick_slash(slot)
+		"shield":
+			await _skill_shield_block(slot)
+		_:
+			if lbl_log:
+				lbl_log.text = "Skill not implemented yet."
+
+	_update_skills_ui()
+
+
+
+
+
+func _skill_power_strike(slot:int) -> void:
+	# Gwarantowany krytyk kosztem 10% bieżącego HP
+	resolving_turn = true
+
+	var cost = max(1, int(ceil(player.hp * 0.10)))
+	player.hp = max(1, player.hp - cost)
+	player.emit_signal("hp_changed", player.hp, player.max_hp)
+	show_damage_popup(player, "-%d HP" % cost, "hit")
+
+	await get_tree().create_timer(0.12).timeout
+
+	var base_dmg: int = calc_player_weapon_damage()
+	var dmg := int(round(float(base_dmg) * calc_crit_multiplier_safe()))
+	enemy.take_damage(dmg)
+	show_damage_popup(enemy, str(dmg), "crit")
+	if lbl_log:
+		lbl_log.text = "Power Strike! Guaranteed CRIT for %d dmg (HP cost %d)." % [dmg, cost]
+
+	# Barbarian lifesteal na CRIT
+	if bloodlust_lifesteal > 0.0 and player.is_alive():
+		var heal = max(1, int(round(dmg * bloodlust_lifesteal)))
+		player.hp = min(player.max_hp, player.hp + heal)
+		player.emit_signal("hp_changed", player.hp, player.max_hp)
+		show_damage_popup(player, "+" + str(heal), "heal")
+
+	# ustaw cooldown
+	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
+	_update_skills_ui()
+
+	await get_tree().create_timer(0.1).timeout
+
+	if enemy.is_alive():
+		set_turn(Turn.ENEMY)
+	_tick_skill_cooldowns()
+	resolving_turn = false
+
+
+
+
+# drobny „bezpiecznik”: jeśli w przyszłości coś zepsuje naszyjnik/crit mult
+func calc_crit_multiplier() -> float:
+	# bazowy mnożnik + wpływ statystyki CRIT + bonus z naszyjnika
+	var mult: float = CRIT_MULT + float(player.crit) * CRIT_PER_POINT
+	if not equipped_necklace.is_empty():
+		mult += float(equipped_necklace.get("crit_bonus", 0.0))
+	return max(1.0, mult)  # bezpieczeństwo: nigdy poniżej 1.0
+
+func calc_crit_multiplier_safe() -> float:
+	var m: float = calc_crit_multiplier()
+	if not is_finite(m) or m <= 0.0:
+		return CRIT_MULT
+	return m
+
+
+func _skill_basic_strike(slot:int) -> void:
+	# 120% obrażeń broni; kończy turę; standardowy CD
+	resolving_turn = true
+
+	var base_dmg: int = calc_player_weapon_damage()
+	var dmg := int(round(float(base_dmg) * 1.2))
+	enemy.take_damage(dmg)
+	show_damage_popup(enemy, str(dmg), "hit")
+	if lbl_log:
+		lbl_log.text = "Basic Strike for %d dmg." % dmg
+
+	# cooldown
+	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
+	_update_skills_ui()
+
+	await get_tree().create_timer(0.1).timeout
+	if enemy.is_alive():
+		set_turn(Turn.ENEMY)
+	_tick_skill_cooldowns()
+	resolving_turn = false
+
+func _skill_quick_slash(slot:int) -> void:
+	# Dwa szybkie ciosy: każdy 60%–100% bazowych obrażeń broni
+	resolving_turn = true
+
+	var base: int = calc_player_weapon_damage()
+	var h1 = max(1, int(round(base * randf_range(0.60, 1.00))))
+	var h2 = max(1, int(round(base * randf_range(0.60, 1.00))))
+	var total = h1 + h2
+
+	enemy.take_damage(h1)
+	show_damage_popup(enemy, str(h1), "hit")
+	await get_tree().create_timer(0.05).timeout
+	if enemy.is_alive():
+		enemy.take_damage(h2)
+		show_damage_popup(enemy, str(h2), "hit")
+
+	if lbl_log:
+		lbl_log.text = "Quick Slash! %d + %d = %d dmg." % [h1, h2, total]
+
+	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
+	_update_skills_ui()
+
+	await get_tree().create_timer(0.1).timeout
+	if enemy.is_alive():
+		set_turn(Turn.ENEMY)
+	_tick_skill_cooldowns()
+	resolving_turn = false
+
+func _skill_shield_block(slot:int) -> void:
+	# Następny otrzymany cios zostanie w 100% zablokowany
+	resolving_turn = true
+	shield_active = true
+	if lbl_log:
+		lbl_log.text = "Shield raised! Next incoming hit will be BLOCKED."
+	show_damage_popup(player, "SHIELD", "heal")
+
+	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
+	_update_skills_ui()
+
+	await get_tree().create_timer(0.1).timeout
+	# kończy turę gracza normalnie
+	if enemy.is_alive():
+		set_turn(Turn.ENEMY)
+	_tick_skill_cooldowns()
+	resolving_turn = false
+
+func _skill_fury(slot:int) -> void:
+	# Barbarian: Fury = wykonaj DWA ataki z rzędu (pomijamy turę wroga tylko raz – po dwóch ciosach wróg normalnie atakuje)
+	resolving_turn = true
+
+	var log_prefix := "Fury"
+	var _hits_done := 0
+
+	for i in range(2): # dwa uderzenia
+		if not player.is_alive() or not enemy.is_alive():
+			break
+		var roll:int = randi_range(1, 20)
+		# Możesz pominąć animację, jeśli chcesz szybszy skill — ja zostawiam, żeby było spójnie:
+		await _play_d20_animation(roll)
+		var desc := _player_attack_round_with_roll(roll)
+		_hits_done += 1
+
+		# podbij log — pokazujemy który to cios z dwóch
+		if lbl_log:
+			lbl_log.text = "%s: strike %d/2\n%s" % [log_prefix, i+1, desc]
+
+		# krótka pauza między ciosami
+		await get_tree().create_timer(0.08).timeout
+
+		# jeśli wróg padł po pierwszym — kończymy pętlę
+		if not enemy.is_alive():
+			break
+
+	# ustaw cooldown na slocie, z którego użyto skilla
+	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
+	_update_skills_ui()
+
+	# mała pauza kosmetyczna
+	await get_tree().create_timer(0.1).timeout
+
+	# po dwóch ciosach przekazujemy turę wrogowi (jeśli żyje)
+	if enemy.is_alive():
+		set_turn(Turn.ENEMY)
+
+	# jak po zwykłym ataku – odlicz CD o turę
+	_tick_skill_cooldowns()
+	resolving_turn = false
+
+func _grant_class_skills(class_key: String) -> void:
+	# Slot [1] = podstawowa umiejętność (zostaje bez zmian, jeśli już masz)
+	# Jeśli chcesz mieć pewność, że zawsze istnieje: odkomentuj poniższe 2 linie:
+	# skills[1] = {"key":"basic_strike", "name":"Basic Strike", "type":"active", "desc":"Reliable hit."}
+	# skill_cooldowns[1] = 0
+
+	# Wyczyść poprzedni slot [2] i pasywki (na wypadek zmiany klasy w testach)
+	if skills.has(2):
+		skills.erase(2)
+	if skill_cooldowns.has(2):
+		skill_cooldowns.erase(2)
+	passive_dodge_chance = 0.0
+	passive_dr_bonus = 0.0
+	bloodlust_lifesteal = 0.0
+
+	match class_key:
+		"warrior":
+			# Active: Power Strike (gwarantowany CRIT, koszt HP) – slot [2]
+			skills[2] = {
+				"key":"power_strike",
+				"name":"Power Strike",
+				"type":"active",
+				"desc":"Guaranteed critical hit, costs 10% current HP."
+			}
+			skill_cooldowns[2] = 0
+			# (brak pasywki – możesz dodać własną później)
+
+		"assassin":
+			# Active: Quick Slash (2 szybkie ciosy 60–100% dmg) – slot [2]
+			skills[2] = {
+				"key":"quick_slash",
+				"name":"Quick Slash",
+				"type":"active",
+				"desc":"Two swift hits (60–100% dmg each)."
+			}
+			skill_cooldowns[2] = 0
+			# Passive: Cat Movement (5% dodge)
+			passive_dodge_chance = 0.05
+
+		"guardian":
+			# Active: Shield (blokuje następny cios) – slot [2]
+			skills[2] = {
+				"key":"shield",
+				"name":"Shield",
+				"type":"active",
+				"desc":"Block the next incoming hit."
+			}
+			skill_cooldowns[2] = 0
+			# Passive: Heavily Armed (+10% DR)
+			passive_dr_bonus = 0.10
+
+		"barbarian":
+			# Active: Fury (dwa losowania ataku pod rząd zamiast jednego) – slot [2]
+			skills[2] = {
+				"key":"fury",
+				"name":"Fury",
+				"type":"active",
+				"desc":"Two back-to-back attacks."
+			}
+			skill_cooldowns[2] = 0
+			# Passive: Bloodlust – lekki lifesteal z CRIT (jeśli używasz w logice ataku)
+			bloodlust_lifesteal = 0.10
+
+		_:
+			# brak/nieznana klasa – nic nie dodajemy
+			pass
+
+	# odśwież UI jeśli panel już istnieje
+	_update_skills_ui()
+
+func _current_passive_description() -> String:
+	match chosen_class:
+		"assassin":
+			return "[PASSIVE] Cat Movement: +5% chance to dodge a hit."
+		"guardian":
+			return "[PASSIVE] Heavily Armed: +10% Damage Reduction."
+		"barbarian":
+			return "[PASSIVE] Bloodlust: Heal 10% of damage on CRIT."
+		"warrior":
+			return "[PASSIVE] Weapon Mastery: +10% weapon damage."
+		_:
+			return ""
+
+func _unvisited_candidate_dungeons() -> Array[int]:
+	var out: Array[int] = []
+	for k in DUNGEONS.keys():
+		var i := int(k)
+		# wybieramy tylko nowe dungeony 2..N, nie aktualny i nie odwiedzone
+		if i >= 2 and i != current_dungeon_index and not visited_dungeons.has(i):
+			out.append(i)
+	return out
+
+func _dungeon_name(idx:int) -> String:
+	if DUNGEONS.has(idx):
+		return String(DUNGEONS[idx]["name"])
+	return "Unknown"
+
+func _offer_branch_choice_after_boss() -> void:
+	var candidates := _unvisited_candidate_dungeons()
+	if candidates.is_empty():
+		# brak nowych – wracamy do Twojej dotychczasowej ścieżki
+		_switch_to_next_dungeon()
+		return
+
+	candidates.shuffle()
+	var selections := candidates.slice(0, min(2, candidates.size()))  # 1 lub 2
+
+	var win := Window.new()
+	win.title = "Choose your next path"
+	win.unresizable = true
+	win.size = Vector2i(560, 280)
+
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 14)
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.size_flags_vertical   = Control.SIZE_EXPAND_FILL
+	win.add_child(root)
+
+	var lbl := Label.new()
+	lbl.text = "Boss defeated!\nChoose your next destination:"
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.add_theme_font_size_override("font_size", 20)
+	if DMG_FONT: lbl.add_theme_font_override("font", DMG_FONT)
+	root.add_child(lbl)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	root.add_child(row)
+
+	for idx in selections:
+		var b := Button.new()
+		b.text = _dungeon_name(idx)
+		b.custom_minimum_size = Vector2(220, 64)
+		b.add_theme_font_size_override("font_size", 18)
+		b.pressed.connect(func():
+			_switch_to_dungeon(idx)
+			if is_instance_valid(win): win.queue_free()
+		)
+		row.add_child(b)
+
+	# Zatrzymaj atak na czas wyboru
+	if btn_attack: btn_attack.disabled = true
+
+	if $CanvasLayer:
+		$CanvasLayer.add_child(win)
+	else:
+		add_child(win)
+	win.popup_centered()
+	win.grab_focus()
+
+
+
+func _ensure_world_background() -> void:
+	if bg_sprite and is_instance_valid(bg_sprite):
+		return
+	bg_sprite = Sprite2D.new()
+	bg_sprite.name = "WorldBackground"
+	bg_sprite.centered = false           # lewy-górny narożnik w (0,0)
+	bg_sprite.z_index = -1000            # pewnie ZA postaciami
+	add_child(bg_sprite)                 # ← DO GŁÓWNEGO NODE2D, nie do CanvasLayer!
+
+	# reaguj na zmianę rozmiaru okna
+	get_viewport().size_changed.connect(_fit_background_to_viewport)
+
+func _fit_background_to_viewport() -> void:
+	if not bg_sprite or not bg_sprite.texture:
+		return
+	var tex_size: Vector2 = bg_sprite.texture.get_size()
+	if tex_size.x <= 0 or tex_size.y <= 0:
+		return
+	var vp: Vector2 = get_viewport_rect().size
+	var sx := vp.x / tex_size.x
+	var sy := vp.y / tex_size.y
+	var s = max(sx, sy)                 # COVER – wypełnij ekran
+	bg_sprite.scale = Vector2(s, s)
+	_update_world_background_position()
+	bg_sprite.position = Vector2.ZERO    # lewy-górny róg ekranu
+
+func _apply_world_background_for_current_dungeon() -> void:
+	_ensure_world_background()
+	var dname := String(DUNGEONS[current_dungeon_index]["name"])
+	var path := String(BG_BY_DUNGEON.get(dname, ""))
+	if path == "":
+		bg_sprite.texture = null
+		return
+	var tex := load(path)
+	if tex is Texture2D:
+		bg_sprite.texture = tex
+		_fit_background_to_viewport()
+		_update_world_background_position()
+
+func _update_world_background_position() -> void:
+	if bg_sprite == null or not is_instance_valid(bg_sprite): return
+	if cam == null: return
+	if bg_sprite.texture == null: return
+
+	var vp := get_viewport_rect().size
+	var sc := bg_sprite.scale
+	# world coords of screen center
+	var center := cam.get_screen_center_position()
+	# move bg so its top-left matches the screen top-left
+	bg_sprite.global_position = center - Vector2(vp.x * 0.5 / sc.x, vp.y * 0.5 / sc.y)
+
+func _ensure_skills_bg() -> void:
+	if skills_panel == null:
+		return
+	if _skills_bg != null and is_instance_valid(_skills_bg):
+		return
+
+	var tex: Texture2D = null
+
+	# jeśli w tym skrypcie istnieje globalny słownik UI_TEX – użyj go
+	if "UI_TEX" in self:
+		var val = self["UI_TEX"]
+		if typeof(val) == TYPE_DICTIONARY and val.has("bg_tile"):
+			var p := String(val["bg_tile"])
+			if p != "":
+				tex = load(p)
+
+	# fallback – domyślne „skórzane” tło
+	if tex == null:
+		tex = load("res://ui/textures/leather_bg.png")
+
+	if tex:
+		_skills_bg = TextureRect.new()
+		_skills_bg.name = "SkillsBG"
+		_skills_bg.texture = tex
+		_skills_bg.stretch_mode = TextureRect.STRETCH_TILE
+		_skills_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_skills_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_skills_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+		skills_panel.add_child(_skills_bg)
+		skills_panel.move_child(_skills_bg, 0)
+
+
+func _refresh_skill_icons() -> void:
+	# [ikona] [1] Nazwa — ikona po LEWEJ, tekst po PRAWEJ
+	if lbl_skill1:
+		var n1 := _skill_name_from_label(lbl_skill1.text)
+		lbl_skill1.icon = _skill_icon_for(n1)
+		lbl_skill1.expand_icon = false
+		lbl_skill1.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		lbl_skill1.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		lbl_skill1.clip_text = true
+		lbl_skill1.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		lbl_skill1.add_theme_constant_override("content_margin_left", 8)
+
+	if lbl_skill2:
+		var n2 := _skill_name_from_label(lbl_skill2.text)
+		lbl_skill2.icon = _skill_icon_for(n2)
+		lbl_skill2.expand_icon = false
+		lbl_skill2.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		lbl_skill2.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		lbl_skill2.clip_text = true
+		lbl_skill2.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		lbl_skill2.add_theme_constant_override("content_margin_left", 8)
+
+func _ensure_inventory_skin() -> void:
+	# dodaje kafelkowe, skórzane tło pod inv_panel (jeśli jeszcze nie dodane)
+	if inv_panel == null:
+		return
+	if _inv_bg_texrect != null and is_instance_valid(_inv_bg_texrect):
+		return
+
+	var tex: Texture2D = null
+	# jeśli masz słownik UI_TEX z "bg_tile" – użyj go
+	if "UI_TEX" in self:
+		var val = self["UI_TEX"]
+		if typeof(val) == TYPE_DICTIONARY and val.has("bg_tile"):
+			var p := String(val["bg_tile"])
+			if p != "":
+				tex = load(p)
+
+	if tex == null:
+		tex = load(INVENTORY_BG_TEX_PATH)
+
+	if tex:
+		_inv_bg_texrect = TextureRect.new()
+		_inv_bg_texrect.name = "InventoryBG"
+		_inv_bg_texrect.texture = tex
+		_inv_bg_texrect.stretch_mode = TextureRect.STRETCH_TILE
+		_inv_bg_texrect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_inv_bg_texrect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_inv_bg_texrect.set_anchors_preset(Control.PRESET_FULL_RECT)
+		inv_panel.add_child(_inv_bg_texrect)
+		inv_panel.move_child(_inv_bg_texrect, 0)  # na sam spód
+
+
+
+
+func _apply_icons_to_inventory_list() -> void:
+	if inv_labels_container == null or inv_labels_container.get_child_count() == 0:
+		return
+
+	# aktualna zakładka
+	var tab_keys: Array[String] = ["weapon", "armor", "helmet", "necklace"]
+	var key_index: int = clamp(inv_tab_index, 0, tab_keys.size() - 1)
+	var slot_key: String = tab_keys[key_index]
+
+	for row in inv_labels_container.get_children():
+		if not (row is HBoxContainer or row is PanelContainer or row is VBoxContainer):
+			continue
+
+		# znajdź główną etykietę (nazwę itemu)
+		var main_label: Label = null
+		for c in row.get_children():
+			if c is Label:
+				main_label = c
+				break
+
+		if main_label == null:
+			continue
+
+		var item_name := main_label.text.to_lower()
+		var guess_type := slot_key
+
+		# dla broni rozpoznaj typ po nazwie
+		if slot_key == "weapon":
+			for t in ICON_BY_TYPE.keys():
+				if item_name.find(t) >= 0:
+					guess_type = t
+					break
+
+		# załaduj teksturę ikony
+		var tex: Texture2D = null
+		if ICON_BY_TYPE.has(guess_type):
+			var path: String = ICON_BY_TYPE[guess_type]
+			if ResourceLoader.exists(path):
+				tex = load(path)
+
+		if tex:
+			# sprawdź, czy już jest ikona (żeby nie duplikować)
+			var has_icon := false
+			for c in row.get_children():
+				if c is TextureRect and c.name == "ItemIcon":
+					has_icon = true
+					break
+			if has_icon:
+				continue
+
+			var icon := TextureRect.new()
+			icon.name = "ItemIcon"
+			icon.texture = tex
+			icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			icon.custom_minimum_size = Vector2(22, 22)
+			icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+			# wstaw ikonę na sam początek wiersza (przed nazwą)
+			row.add_child(icon)
+			row.move_child(icon, 0)
+
+			# dodaj mały odstęp między ikoną a tekstem
+			if row.has_method("add_theme_constant_override"):
+				row.add_theme_constant_override("separation", 6)
+
+# Zwraca ścieżkę ikony dla przedmiotu na podstawie typu/formy/nazwy.
+func _icon_path_for_item(it: Dictionary) -> String:
+	var typ := String(it.get("type", "")).to_lower()
+	var guess := typ
+
+	# Dla broni preferuj pole "form" (jeśli masz je w itemach), inaczej rozpoznaj po nazwie.
+	if typ == "weapon":
+		if it.has("form"):
+			guess = String(it["form"]).to_lower()  # np. "sword", "axe", ...
+		else:
+			var n := String(it.get("name","")).to_lower()
+			var tokens := ["sword","axe","dagger","mace","spear","hammer","blade","saber","bow","crossbow"]
+			for t in tokens:
+				if n.find(t) >= 0:
+					guess = t
+					break
+
+	# Standard ikon: res://ikony/<nazwa>_icon.png
+	if guess != "":
+		return "res://ikony/%s_icon.png" % guess
+	return ""
+
+func _icon_for_item(it: Dictionary) -> Texture2D:
+	var path := _icon_path_for_item(it)
+	if path != "" and ResourceLoader.exists(path):
+		var tex = load(path)
+		if tex is Texture2D:
+			return tex
+	return null
+
+# === INVENTORY SKIN HELPERS ===
+
+const INV_FRAME_PATH := "res://ui/frames/inventory_frame.png"
+const INV_BG_TILE    := "res://ui/textures/leather_bg.png"
+const SLOT_COMMON    := "res://ui/slots/slot_common.png"
+const SLOT_RARE      := "res://ui/slots/slot_rare.png"
+const SLOT_EPIC      := "res://ui/slots/slot_epic.png"
+const SLOT_LEG       := "res://ui/slots/slot_legendary.png"
+const SLOT_HOVER     := "res://ui/slots/slot_hover.png"
+const SLOT_SELECT    := "res://ui/slots/slot_select.png"
+
+func _tex(p: String) -> Texture2D:
+	if p == "" or not ResourceLoader.exists(p):
+		return null
+	var t = load(p)
+	return t if t is Texture2D else null
+
+# 9-slice ze stałymi marginesami (te grafiki były robione pod ~16px)
+func _sb9(path: String, m := Vector4(16,16,16,16)) -> StyleBoxTexture:
+	var tx := _tex(path)
+	if tx == null: return null
+	var sb := StyleBoxTexture.new()
+	sb.texture = tx
+	sb.set_texture_margin(SIDE_LEFT,  m.x)
+	sb.set_texture_margin(SIDE_TOP,   m.y)
+	sb.set_texture_margin(SIDE_RIGHT, m.z)
+	sb.set_texture_margin(SIDE_BOTTOM,m.w)
+	return sb
+
+# skórzane tło kafelkowane dla dowolnego PanelContainer
+func _apply_tiled_bg(panel: PanelContainer) -> void:
+	if panel == null: return
+	if panel.has_node("LeatherBG"): return
+	var tex := _tex(INV_BG_TILE)
+	if tex == null: return
+	var bg := TextureRect.new()
+	bg.name = "LeatherBG"
+	bg.texture = tex
+	bg.stretch_mode = TextureRect.STRETCH_TILE
+	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	panel.add_child(bg)
+	panel.move_child(bg, 0)
+
+# główna ramka 9-slice dla panelu inventory / compare
+func _apply_frame(panel: PanelContainer) -> void:
+	if panel == null: return
+	var sb := _sb9(INV_FRAME_PATH)
+	if sb:
+		panel.add_theme_stylebox_override("panel", sb)
+
+# wybór „slotu” wg rzadkości + stanu
+func _slot_style_for(rarity: int, selected: bool, hovered: bool) -> StyleBoxTexture:
+	if selected:
+		var s := _sb9(SLOT_SELECT)
+		if s: 
+			return s
+	if hovered:
+		var h := _sb9(SLOT_HOVER)
+		if h: 
+			return h
+	match rarity:
+		Rarity.LEGENDARY:
+			var a := _sb9(SLOT_LEG)
+			if a:
+				return a
+		Rarity.EPIC:
+			var e := _sb9(SLOT_EPIC)
+			if e:
+				return e
+		Rarity.RARE:
+			var r := _sb9(SLOT_RARE)
+			if r:
+				return r
+		_: # to był błąd — w GDScript 4 trzeba dodać 'match ...' przed podkreśleniem
+			var c := _sb9(SLOT_COMMON)
+			return c
+
+	# fallback — zawsze coś zwróć
+	return _sb9(SLOT_COMMON)
+
+func _scroll_inventory_to_selection() -> void:
+	if inv_labels_container == null:
+		return
+	var sc := inv_labels_container.get_parent() as ScrollContainer
+	if sc == null:
+		return
+
+	var margin: float = 48.0
+
+	# znajdź zaznaczony wiersz
+	var selected_row: Control = null
+	for child in inv_labels_container.get_children():
+		if child is Control and child.has_meta("selected") and bool(child.get_meta("selected")):
+			selected_row = child
+			break
+	if selected_row == null:
+		return
+
+	# Pozycja i rozmiar w UKŁADZIE VBoxa (lokalnie, więc bez konwersji)
+	var selected_top: float = selected_row.position.y
+	var selected_bottom: float = selected_top + selected_row.size.y
+
+	var viewport_h: float = sc.size.y
+	var s: float = float(sc.scroll_vertical)
+
+	# przewijanie z zapasem
+	if selected_top < s + margin:
+		s = max(selected_top - margin, 0.0)
+	elif selected_bottom > s + viewport_h - margin:
+		s = selected_bottom - viewport_h + margin
+	s = max(s, 0.0)
+
+	# clamp do zakresu scrollbar'a, z jawnymi typami
+	var vsb: ScrollBar = null
+	if sc.has_method("get_v_scroll_bar"):
+		vsb = sc.get_v_scroll_bar()
+	elif sc.has_method("get_v_scrollbar"):
+		vsb = sc.get_v_scrollbar()
+
+	if vsb != null:
+		var maxv: float = float(vsb.max_value)
+		var max_scroll: float = max(0.0, maxv)
+		s = clamp(s, 0.0, max_scroll)
+
+	sc.scroll_vertical = int(round(s))
+
+
+# ===============================
+# DEV / DEBUG: generuje po 10 losowych itemów każdego typu
+# ===============================
+func _dev_fill_inventory() -> void:
+	var types := ["weapon", "armor", "helmet", "necklace"]
+	var _rarities := [Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY]
+
+	for t in types:
+		if not inventory.has(t):
+			inventory[t] = []
+
+		for i in range(10):
+			# losowa rzadkość (większe szanse na common)
+			var r_roll := randf()
+			var rarity := Rarity.COMMON
+			if r_roll > 0.9:
+				rarity = Rarity.LEGENDARY
+			elif r_roll > 0.7:
+				rarity = Rarity.EPIC
+			elif r_roll > 0.45:
+				rarity = Rarity.RARE
+
+			var diff := 1 + int(randf_range(0, 5))  # losowy poziom trudności (1–5)
+			var item := _gen_random_item(t, rarity, diff)
+			inventory[t].append(item)
+
+	print("[DEV] Inventory test-fill complete!")
+	_refresh_inventory_ui()
+
+# wywołaj to np. z przycisku "Start Run" w Home
+# Wywołaj to na starcie (albo gdy wracasz do domu)
+
+# Po kliknięciu "Start Run"
+
+
+# wywołaj to w dungeonie z przycisku "Exit to Home"
+func _return_to_home_and_save(slot: int) -> void:
+	GameState.end_run_to_home()
+	GameState.save(slot)
+
+	_refresh_inventory_ui()
+
+	print("[HOME] Saved to slot %d" % slot)
+	# przełącz UI na tryb Home
+
+# ==========================
+# HOME PANEL (menu główne w grze)
+# ==========================
+# Ustaw "process_mode" rekurencyjnie dla całego poddrzewa
+
+# Spróbuj ustawić tło (działa zarówno gdy masz zmienną bg_sprite, jak i node "Background")
+func _try_set_bg(path: String) -> void:
+	if path == "" or not ResourceLoader.exists(path):
+		return
+	var bg: Sprite2D = null
+	if "bg_sprite" in self:
+		var v = get("bg_sprite")
+		if v is Sprite2D:
+			bg = v
+	if bg == null:
+		bg = get_node_or_null("Background") as Sprite2D
+	if bg:
+		bg.texture = load(path)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_go_home"):
+		# świadomie ignorujemy w dungeonie
+		print("[HOME] Blocked: cannot enter HOME during a run")
+		return
+
+
+
+func _set_process_mode_recursive(n: Node, mode: int) -> void:
+	n.process_mode = mode
+	for c in n.get_children():
+		_set_process_mode_recursive(c, mode)
+
+
+func _continue_run_after_event() -> void:
+	call_deferred("_continue_run_after_event_async")
+
+func _continue_run_after_event_async() -> void:
+	if _encounter_replaced_by_event:
+		_encounter_replaced_by_event = false
+		var d: Dictionary = _pick_enemy()
+		_request_spawn(d)
+
+		return
+	await _transition_to_next_enemy()
+
+func _ensure_shrine_dialog() -> void:
+	if shrine_dialog and is_instance_valid(shrine_dialog):
+		print("[SHRINE_DEBUG] Shrine dialog already exists.")
+		return
+
+	var parent_ctrl: Node = null
+	if has_node("CanvasLayer/UIRoot"):
+		parent_ctrl = $CanvasLayer/UIRoot
+	elif has_node("CanvasLayer"):
+		parent_ctrl = $CanvasLayer
+	else:
+		parent_ctrl = self
+
+	shrine_dialog = AcceptDialog.new()
+	shrine_dialog.title = "Sacred Shrine"
+	shrine_dialog.min_size = Vector2(680, 420)
+	shrine_dialog.dialog_hide_on_ok = false  # sami wołamy kontynuację
+
+	# layout
+	var header := VBoxContainer.new()
+	header.add_theme_constant_override("separation", 10)
+	shrine_dialog.add_child(header)
+
+	var title_lbl := Label.new()
+	title_lbl.text = "Choose an item to make PERMANENT"
+	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	header.add_child(title_lbl)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical   = Control.SIZE_EXPAND_FILL
+	header.add_child(scroll)
+
+	shrine_list_box = VBoxContainer.new()
+	shrine_list_box.add_theme_constant_override("separation", 8)
+	scroll.add_child(shrine_list_box)
+
+	# przycisk wyjścia
+	shrine_dialog.add_button("Leave the Shrine", true, "leave")
+
+	# sygnały
+	shrine_dialog.canceled.connect(func():
+		_shrine_dialog_open = false
+		_shrine_in_progress = false
+		# opcjonalnie: jeśli chcesz cooldown także po „Leave”
+		if shrine_cooldown <= 0:
+			shrine_cooldown = 6           # ← ile walk pauzy po opuszczeniu bez wyboru
+		_continue_run_after_event()
+	)
+
+	shrine_dialog.custom_action.connect(func(action: String):
+		if action == "leave":
+			_shrine_dialog_open = false
+			_shrine_in_progress = false
+			if shrine_cooldown <= 0:
+				shrine_cooldown = 6       # j.w.
+			_continue_run_after_event()
+	)
+
+
+	print("[SHRINE_DEBUG] Creating new shrine_dialog under:", parent_ctrl.name)
+	parent_ctrl.call_deferred("add_child", shrine_dialog)
+
+
+func _open_shrine_dialog() -> void:
+	print("[SHRINE_DEBUG] Opening Shrine Dialog... (start)")
+	_ensure_shrine_dialog()
+
+	if not _has_any_items_in_inventory():
+		_shrine_dialog_open = false
+		_shrine_in_progress = false
+		call_deferred("_continue_run_after_event")
+		return
+
+	_shrine_dialog_open = true
+	_shrine_locked = false
+	_fill_shrine_dialog_items()
+	call_deferred("_popup_shrine_dialog")
+
+
+
+
+func _popup_shrine_dialog() -> void:
+	if shrine_dialog and is_instance_valid(shrine_dialog):
+		print("[SHRINE_DEBUG] Popup shrine dialog centered")
+		shrine_dialog.popup_centered_ratio(0.6)
+
+
+
+func _fill_shrine_dialog_items() -> void:
+	if not shrine_list_box:
+		return
+
+	# wipe
+	for c in shrine_list_box.get_children():
+		c.queue_free()
+
+	var keys: Array[String] = ["weapon","armor","helmet","necklace"]
+	var any_added := false
+
+	for k in keys:
+		var arr: Array = inventory.get(k, []) as Array
+		if arr.is_empty():
+			continue
+
+		var head := Label.new()
+		head.text = k.to_upper()
+		head.add_theme_color_override("font_color", Color(1, 0.92, 0.60))
+		shrine_list_box.add_child(head)
+
+		for i in arr.size():
+			var it: Dictionary = arr[i]
+
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 10)
+			row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+			var lbl := Label.new()
+			lbl.text = str(it.get("name","?"))
+			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(lbl)
+
+			var btn := Button.new()
+			btn.text = "Make Permanent"
+			btn.disabled = bool(it.get("permanent", false))
+			btn.pressed.connect(func(_k:=k, _idx:=i):
+				_on_shrine_pick_permanent(_k, _idx)
+			)
+			row.add_child(btn)
+
+			shrine_list_box.add_child(row)
+			any_added = true
+
+	if not any_added:
+		var info := Label.new()
+		info.text = "(No items to choose)"
+		info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		shrine_list_box.add_child(info)
+
+
+
+func _on_shrine_pick_permanent(slot_key:String, idx:int) -> void:
+	if _shrine_locked:
+		return
+	_shrine_locked = true
+	
+	# blokujemy wszystkie przyciski w dialogu
+	for row in shrine_list_box.get_children():
+		for ch in row.get_children():
+			if ch is Button:
+				ch.disabled = true
+	
+	var items:Array = inventory.get(slot_key, [])
+	if idx < 0 or idx >= items.size():
+		_close_shrine_and_continue()
+		return
+	
+	var it:Dictionary = items[idx]
+	if it.get("permanent", false):
+		_close_shrine_and_continue()
+		return
+	
+	# ZAPISUJEMY jako permanent (przez GameState.meta, żeby save() to uwzględnił)
+	GameState.make_permanent(slot_key, it)
+	
+	# oznaczamy w bieżącym runie
+	it["permanent"] = true
+	
+	_show_toast("Item '" + str(it.get("name", "?")) + "' is now PERMANENT!")
+	
+	# cooldown po udanym wyborze
+	shrine_cooldown = max(shrine_cooldown, 8)  # możesz zmienić na 6/10
+	
+	# odśwież UI
+	_refresh_inventory_ui()
+	
+	# zamykamy i idziemy dalej
+	if shrine_dialog:
+		shrine_dialog.hide()
+	_shrine_dialog_open = false
+	_shrine_in_progress = false
+	
+	_continue_run_after_event()
+
+func _close_shrine_and_continue() -> void:
+	if shrine_dialog:
+		shrine_dialog.hide()
+	_shrine_dialog_open = false
+	_shrine_in_progress = false
+	_continue_run_after_event()
+
+func _has_any_items_in_inventory() -> bool:
+	for k in ["weapon","armor","helmet","necklace"]:
+		var arr: Array = inventory.get(k, []) as Array
+		if not arr.is_empty():
+			return true
+	return false
+
+
+# TWARDY WRAPPER — każda próba bezpośredniego wywołania _spawn_enemy
+# zostanie przekierowana do routera.
+func _spawn_enemy(data: Dictionary) -> void:
+	_request_spawn(data)
+
+
+func _request_spawn(data: Dictionary) -> void:
+	# Centralny router – zawsze tędy
+	var __name := String(data.get("name", ""))
+	var __flag := bool(data.get("shrine", false))
+	var __is_shrine := __flag or __name.to_lower().find("shrine") != -1
+	print("[SPAWN] router name=", __name, " shrine_flag=", __flag, " → is_shrine=", __is_shrine)
+
+	if __is_shrine:
+		# już trwa? ignoruj kolejne zgłoszenia
+		if _shrine_in_progress or _shrine_dialog_open:
+			print("[SHRINE_DEBUG] shrine request ignored (already in progress)")
+			return
+
+		# nie mamy żadnych przedmiotów? omiń wydarzenie
+		if not _has_any_items_in_inventory():
+			_encounter_replaced_by_event = false
+			call_deferred("_continue_run_after_event")
+			return
+
+		_encounter_replaced_by_event = true
+		_shrine_in_progress = true
+		call_deferred("_open_shrine_dialog")
+		return
+
+	# Normalny przeciwnik – deleguj do istniejącego spawna
+	call_deferred("_spawn_enemy_impl", data)  # ważne: deferred = stabilniej przy UI
+
+func _is_item_permanent(it: Dictionary) -> bool:
+	return bool(it.get("permanent", false))
+
+
+func _make_permanent_badge() -> PanelContainer:
+	var p := PanelContainer.new()
+
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.18, 0.32, 0.12, 0.95)
+	sb.border_color = Color(0.45, 0.80, 0.35, 1.0)
+	# Godot 4: ustawiamy szerokości krawędzi osobno
+	sb.border_width_left = 1
+	sb.border_width_right = 1
+	sb.border_width_top = 1
+	sb.border_width_bottom = 1
+	sb.corner_radius_top_left = 6
+	sb.corner_radius_top_right = 6
+	sb.corner_radius_bottom_left = 6
+	sb.corner_radius_bottom_right = 6
+	p.add_theme_stylebox_override("panel", sb)
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var box := MarginContainer.new()
+	box.add_theme_constant_override("margin_left", 6)
+	box.add_theme_constant_override("margin_right", 6)
+	box.add_theme_constant_override("margin_top", 2)
+	box.add_theme_constant_override("margin_bottom", 2)
+
+	var lbl := Label.new()
+	lbl.text = "PERMANENT"
+	lbl.add_theme_font_size_override("font_size", 11)
+	lbl.add_theme_color_override("font_color", Color(0.92, 1.0, 0.92, 1.0))
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+
+	box.add_child(lbl)
+	p.add_child(box)
+
+	p.custom_minimum_size = Vector2(96, 20)
+	return p
+
+func _ui_root() -> Node:
+	if has_node("CanvasLayer/UIRoot"):
+		return $CanvasLayer/UIRoot
+	if has_node("CanvasLayer"):
+		return $CanvasLayer
+	return self
+
+
+func _show_toast(msg: String, duration: float = 1.5) -> void:
+	var parent := _ui_root()
+
+	var panel := PanelContainer.new()
+	panel.name = "ToastPanel"
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0, 0, 0, 0.75)
+	sb.border_color = Color(1, 1, 1, 0.20)
+	sb.border_width_left = 1
+	sb.border_width_right = 1
+	sb.border_width_top = 1
+	sb.border_width_bottom = 1
+	sb.corner_radius_top_left = 8
+	sb.corner_radius_top_right = 8
+	sb.corner_radius_bottom_left = 8
+	sb.corner_radius_bottom_right = 8
+	panel.add_theme_stylebox_override("panel", sb)
+	panel.z_index = 100
+
+	var pad := MarginContainer.new()
+	pad.add_theme_constant_override("margin_left", 16)
+	pad.add_theme_constant_override("margin_right", 16)
+	pad.add_theme_constant_override("margin_top", 10)
+	pad.add_theme_constant_override("margin_bottom", 10)
+
+	var lbl := Label.new()
+	lbl.text = msg
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.add_theme_font_size_override("font_size", 18)
+	pad.add_child(lbl)
+	panel.add_child(pad)
+
+	# wycentruj – lekko nad środkiem
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.35
+	panel.anchor_bottom = 0.35
+	panel.offset_left = -220
+	panel.offset_right = 220
+	panel.offset_top = -26
+	panel.offset_bottom = 26
+	panel.modulate = Color(1,1,1,0)
+
+	parent.add_child(panel)
+
+	var t := create_tween()
+	t.tween_property(panel, "modulate:a", 1.0, 0.15)
+	t.tween_interval(duration)
+	t.tween_property(panel, "modulate:a", 0.0, 0.25)
+	t.tween_callback(Callable(panel, "queue_free"))
+
+func _go_to_home_test() -> void:
+	# opcjonalnie: szybkie potwierdzenie w konsoli
+	print("[TEST] Przechodzę do domu na żądanie")
+	
+	# jeśli chcesz zachować stan runu
+	# GameState.end_run_to_home()
+	
+	get_tree().change_scene_to_file("res://home_scene.tscn")
+
+
+# ==============================================================
+# DEV PANEL
+# Włącz/wyłącz przyciskiem [DEV] widocznym w prawym górnym rogu.
+# ==============================================================
+
+var _dev_panel: PanelContainer = null
+var _dev_panel_visible: bool = false
+var _dev_forced_rarity: int = -1  # -1 = losowa; 0-3 = wymuszony drop
+
+func _dev_create_panel() -> void:
+	if _dev_panel and is_instance_valid(_dev_panel):
+		return
+
+	# --- przycisk toggle (zawsze widoczny) ---
+	var toggle_btn := Button.new()
+	toggle_btn.text = "DEV"
+	toggle_btn.add_theme_font_size_override("font_size", 13)
+	toggle_btn.custom_minimum_size = Vector2(52, 28)
+	toggle_btn.position = Vector2(get_viewport_rect().size.x - 60, 4)
+	toggle_btn.z_index = 200
+	toggle_btn.pressed.connect(_dev_toggle_panel)
+	if DMG_FONT: toggle_btn.add_theme_font_override("font", DMG_FONT)
+	$CanvasLayer.add_child(toggle_btn)
+
+	# --- główny panel ---
+	_dev_panel = PanelContainer.new()
+	_dev_panel.visible = false
+	_dev_panel.z_index = 199
+	_dev_panel.custom_minimum_size = Vector2(280, 0)
+
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.07, 0.10, 0.96)
+	sb.border_color = Color(0.9, 0.75, 0.2, 1.0)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(8)
+	_dev_panel.add_theme_stylebox_override("panel", sb)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	_dev_panel.add_child(vbox)
+
+	# tytuł
+	var title := Label.new()
+	title.text = "— DEV PANEL —"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_color_override("font_color", Color(0.9, 0.75, 0.2))
+	title.add_theme_font_size_override("font_size", 15)
+	if DMG_FONT: title.add_theme_font_override("font", DMG_FONT)
+	vbox.add_child(title)
+
+	vbox.add_child(_dev_separator())
+
+	# --- SEKCJA: EVENTY ---
+	vbox.add_child(_dev_section_label("EVENTY"))
+	vbox.add_child(_dev_btn("⚡ Wywołaj Shrine",    func(): _dev_trigger_shrine()))
+	vbox.add_child(_dev_btn("📦 Wywołaj Chest",     func(): _dev_trigger_chest()))
+	vbox.add_child(_dev_btn("🏠 Wróć do domu",      func(): _dev_goto_home()))
+
+	vbox.add_child(_dev_separator())
+
+	# --- SEKCJA: GRACZ ---
+	vbox.add_child(_dev_section_label("GRACZ"))
+	vbox.add_child(_dev_btn("❤ Pełne leczenie",    func(): _dev_full_heal()))
+	vbox.add_child(_dev_btn("⬆ +1 poziom",         func(): _dev_add_level()))
+	vbox.add_child(_dev_btn("⬆⬆ +5 poziomów",      func(): _dev_add_levels(5)))
+	vbox.add_child(_dev_btn("🎒 Wypełnij inventory", func(): _dev_fill_inventory(); _refresh_inventory_ui()))
+
+	vbox.add_child(_dev_separator())
+
+	# --- SEKCJA: DROP RARITY ---
+	vbox.add_child(_dev_section_label("WYMUSZ RZADKOŚĆ DROPU"))
+	var rarity_row := HBoxContainer.new()
+	rarity_row.add_theme_constant_override("separation", 4)
+	for r in [["C", 0, Color(1,1,1)], ["R", 1, Color(0.45,0.75,1)], ["E", 2, Color(0.75,0.55,0.95)], ["L", 3, Color(1.0,0.85,0.2)]]:
+		var rb := Button.new()
+		rb.text = r[0]
+		rb.custom_minimum_size = Vector2(44, 28)
+		rb.add_theme_color_override("font_color", r[2])
+		rb.add_theme_font_size_override("font_size", 13)
+		if DMG_FONT: rb.add_theme_font_override("font", DMG_FONT)
+		var rval: int = r[1]
+		rb.pressed.connect(func(): _dev_set_forced_rarity(rval, rb))
+		rarity_row.add_child(rb)
+	var rb_off := Button.new()
+	rb_off.text = "OFF"
+	rb_off.custom_minimum_size = Vector2(44, 28)
+	rb_off.add_theme_font_size_override("font_size", 12)
+	if DMG_FONT: rb_off.add_theme_font_override("font", DMG_FONT)
+	rb_off.pressed.connect(func(): _dev_set_forced_rarity(-1, rb_off))
+	rarity_row.add_child(rb_off)
+	vbox.add_child(rarity_row)
+
+	vbox.add_child(_dev_separator())
+
+	# --- SEKCJA: DUNGEONS ---
+	vbox.add_child(_dev_section_label("TELEPORT DO DUNGEONU"))
+	for i in DUNGEONS.keys():
+		var dname: String = DUNGEONS[i]["name"]
+		var idx: int = i
+		vbox.add_child(_dev_btn("➤ " + dname, func(): _dev_goto_dungeon(idx)))
+
+	# pozycja panelu: prawy górny róg, pod przyciskiem toggle
+	$CanvasLayer.add_child(_dev_panel)
+	_dev_panel.position = Vector2(get_viewport_rect().size.x - 292, 36)
+
+
+func _dev_toggle_panel() -> void:
+	_dev_panel_visible = !_dev_panel_visible
+	_dev_panel.visible = _dev_panel_visible
+
+
+# --- helpery UI ---
+func _dev_btn(label: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = label
+	b.custom_minimum_size = Vector2(260, 28)
+	b.add_theme_font_size_override("font_size", 13)
+	if DMG_FONT: b.add_theme_font_override("font", DMG_FONT)
+	b.pressed.connect(cb)
+	return b
+
+func _dev_section_label(txt: String) -> Label:
+	var l := Label.new()
+	l.text = txt
+	l.add_theme_color_override("font_color", Color(0.6, 0.9, 0.6))
+	l.add_theme_font_size_override("font_size", 12)
+	if DMG_FONT: l.add_theme_font_override("font", DMG_FONT)
+	return l
+
+func _dev_separator() -> HSeparator:
+	var s := HSeparator.new()
+	s.add_theme_color_override("color", Color(0.3, 0.3, 0.3, 0.8))
+	return s
+
+
+# --- akcje DEV ---
+func _dev_goto_home() -> void:
+	get_tree().change_scene_to_file("res://home_scene.tscn")
+
+func _dev_trigger_shrine() -> void:
+	if _shrine_in_progress or _shrine_dialog_open:
+		_show_toast("Shrine już trwa!", 1.0)
+		return
+	_dev_toggle_panel()
+	_request_spawn({"name": "Sacred Shrine", "hp": 0, "damage": 0, "difficulty": 0, "shrine": true})
+
+func _dev_trigger_chest() -> void:
+	_dev_toggle_panel()
+	_request_spawn(TREASURE_CHEST_DATA.duplicate(true))
+
+func _dev_full_heal() -> void:
+	player.hp = player.max_hp
+	player.emit_signal("hp_changed", player.hp, player.max_hp)
+	show_damage_popup(player, "FULL HEAL", "heal")
+	_show_toast("Gracz uleczony!", 1.0)
+
+func _dev_add_level() -> void:
+	_dev_add_levels(1)
+
+func _dev_add_levels(count: int) -> void:
+	for i in range(count):
+		player.add_xp(player.xp_to_next - player.xp)
+	_show_toast("+%d poziom(ów)! Teraz LVL %d" % [count, player.level], 1.5)
+
+func _dev_set_forced_rarity(r: int, btn: Button) -> void:
+	_dev_forced_rarity = r
+	var names := {-1: "OFF", 0: "Common", 1: "Rare", 2: "Epic", 3: "Legendary"}
+	_show_toast("Wymuszony drop: %s" % names.get(r, "?"), 1.2)
+
+func _dev_goto_dungeon(idx: int) -> void:
+	_dev_toggle_panel()
+	_switch_to_dungeon(idx)
+	_show_toast("Teleport → %s" % DUNGEONS[idx]["name"], 1.5)
