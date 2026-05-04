@@ -50,10 +50,12 @@ size = Vector3(2.3, 2.05, 0.3)
 
 [node name="d20" type="RigidBody3D"]
 script = ExtResource("2_a0nkb")
+dice_color = Color(0.545862, 0.0014365104, 0.7221203, 1)
 
 [node name="DiceMesh" type="MeshInstance3D" parent="."]
 transform = Transform3D(1.571, 0, 0, 0, 1.571, 0, 0, 0, 1.571, 0, 0, 0)
 material_override = SubResource("StandardMaterial3D_6blc4")
+gi_mode = 2
 mesh = SubResource("ArrayMesh_s34t8")
 skeleton = NodePath("")
 
@@ -65,6 +67,7 @@ shape = SubResource("ConvexPolygonShape3D_olwb1")
 
 [node name="Mesh" type="MeshInstance3D" parent="FaceHighligth"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.35, -1)
+visible = false
 material_override = ExtResource("3_x5ctw")
 mesh = SubResource("PrismMesh_dghsr")
 skeleton = NodePath("../..")

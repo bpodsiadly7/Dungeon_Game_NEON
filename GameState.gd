@@ -3,13 +3,15 @@ extends Node
 
 # ====== META (trwałe między runami) ======
 var meta := {
-	# Skrzynka w domu — itemy permanentne bezpieczne na stałe
 	"permanent_chest": {
 		"weapon": [], "armor": [], "helmet": [], "necklace": []
 	},
 	"gold": 0,
 	"unlocked_dungeons": ["Goblin Cave"],
-	"last_class": ""
+	"last_class": "",
+	"visited_dungeons": [0],  
+	"chosen_class": "",      
+	"has_evolved": false      
 }
 
 # ====== AKTYWNY RUN ======
@@ -52,9 +54,19 @@ func end_run_to_home() -> void:
 # Śmierć — traci wszystko: i loot, i loadout
 func on_player_death() -> void:
 	run["active"]    = false
-	run["dungeon"]   = ""
 	run["inventory"] = {"weapon": [], "armor": [], "helmet": [], "necklace": []}
 	run["loadout"]   = {"weapon": [], "armor": [], "helmet": [], "necklace": []}
+	# Reset poziomu gracza
+	meta["player"] = {
+		"level": 1, "xp": 0,
+		"strength": 1, "agility": 1, "vitality": 0, "crit": 0,
+		"stat_points": 0, "max_hp": 100, "hp": 100,
+		"has_evolved": false, "chosen_class": ""
+	}
+	# Klasa zostaje permanentna w meta
+	meta["chosen_class"] = meta.get("chosen_class", "")
+	meta["has_evolved"]  = meta.get("has_evolved", false)
+	save(current_slot)
 
 # Shrine — item z run["inventory"] trafia do skrzynki w domu (oznaczony jako permanent)
 # Ale uwaga: zostaje też w run["inventory"] do końca runa
@@ -115,3 +127,61 @@ func delete_slot(slot: int) -> void:
 
 func slot_info(slot: int) -> Dictionary:
 	return {"exists": FileAccess.file_exists(_slot_path(slot)), "path": _slot_path(slot)}
+
+var current_slot: int = 1  # aktualnie wybrany slot
+
+func reset_meta() -> void:
+	meta = {
+		"permanent_chest": {"weapon": [], "armor": [], "helmet": [], "necklace": []},
+		"gold": 0,
+		"unlocked_dungeons": ["Goblin Cave"],
+		"last_class": "",
+		"visited_dungeons": [0],
+		"chosen_class": "",
+		"has_evolved": false
+	}
+	run = {
+		"active": false,
+		"dungeon": "",
+		"inventory": {"weapon": [], "armor": [], "helmet": [], "necklace": []},
+		"loadout":   {"weapon": [], "armor": [], "helmet": [], "necklace": []}
+	}
+func save_player(p: Node, evolved: bool, cls: String) -> void:
+	meta["player"] = {
+		"level":        p.level,
+		"xp":           p.xp,
+		"strength":     p.strength,
+		"agility":      p.agility,
+		"vitality":     p.vitality,
+		"crit":         p.crit,
+		"stat_points":  p.stat_points,
+		"max_hp":       p.max_hp,
+		"hp":           p.hp,
+		"has_evolved":  evolved,
+		"chosen_class": cls
+	}
+
+func load_player(p: Node) -> Dictionary:
+	var d: Dictionary = meta.get("player", {})
+	if d.is_empty():
+		return {}
+	p.level       = int(d.get("level", 1))
+	p.xp          = int(d.get("xp", 0))
+	p.strength    = int(d.get("strength", 1))
+	p.agility     = int(d.get("agility", 1))
+	p.vitality    = int(d.get("vitality", 0))
+	p.crit        = int(d.get("crit", 0))
+	p.stat_points = int(d.get("stat_points", 0))
+	p.max_hp      = int(d.get("max_hp", 100))
+	p.hp          = int(d.get("hp", p.max_hp))
+	return d
+
+func set_class(cls: String) -> void:
+	meta["chosen_class"] = cls
+	meta["has_evolved"] = true
+
+func get_chosen_class() -> String:
+	return String(meta.get("chosen_class", ""))
+
+func has_class() -> bool:
+	return bool(meta.get("has_evolved", false))

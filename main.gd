@@ -27,8 +27,10 @@ extends Node2D
 @onready var btn_crit_plus: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4/BtnCritPlus
 @onready var lbl_points: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/LblPoints
 @onready var btn_stats_close: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/BtnClose
-
-
+@onready var dice_viewport := $DiceViewport  # NIE $CanvasLayer/DiceViewport
+@onready var dice_roller := $DiceViewport/DiceRoller
+@onready var dice_display := $CanvasLayer/UIRoot/DiceDisplay
+ 
 var home_overlay: ColorRect
 
 var is_in_home: bool = false
@@ -304,7 +306,7 @@ var _event_gap_counter: int = 0      # rośnie przy zwykłych wrogach, reset prz
 const TREASURE_EVENT_CHANCE := 0.10  # 10% szansy zamiast przeciwnika (zmień, jeśli chcesz)
 const TREASURE_TEX := "res://treasures/mystery_chest.png"  # opcjonalna grafika skrzyni
 
-const SHRINE_CHANCE: float = 0.02  # TESTOWO (łatwo wywołać). Po teście zmień np. na 0.10.
+const SHRINE_CHANCE: float = 0.10  # TESTOWO (łatwo wywołać). Po teście zmień np. na 0.10.
 var shrine_dialog: AcceptDialog
 var shrine_list_box: VBoxContainer
 var _shrine_dialog_open: bool = false
@@ -417,36 +419,39 @@ const DUNGEONS := {
 }
 
 # --- Aktywny dungeon/roster ---
-var current_roster: Array[Dictionary] = DUNGEONS[0]["enemies"].duplicate(true)
+var current_roster: Array[Dictionary] = []
 var current_dungeon_index: int = 0  # 0 = Goblin Cave, 1 = Undead Crypt, 2..5 = nowe
 
 # --- Odwiedzone dungeony (start od 0) ---
 var visited_dungeons: Array[int] = [0]
+# Stałe połączenia między dungeonami — klucz: skąd, wartości: dokąd można przejść
+const DUNGEON_CONNECTIONS := {
+	0: [1, 2],   # Goblin Cave → Undead Crypt, Highlands
+	1: [3, 4],   # Undead Crypt → Orc Warcamps, Dark Elf Depths
+	2: [3, 5],   # Highlands → Orc Warcamps, Elderwood
+	3: [4, 5],   # Orc Warcamps → Dark Elf Depths, Elderwood
+	4: [5],      # Dark Elf Depths → Elderwood
+	5: [],       # Elderwood — ostatni dungeon
+}
 
 
 
 # --- Start ---
 func _ready() -> void:
-	# --- gwarantuje, że ui_home i ui_go_home istnieją i mają klawisze ---
-	
-
+	print("[DEBUG] _ready() START")
 	for e in current_roster:
 		if typeof(e) != TYPE_DICTIONARY or not (e.has("name") and e.has("hp") and e.has("damage") and e.has("difficulty")):
 			push_warning("Bad ENEMIES entry: %s" % str(e))
-
 	randomize()
-
 	# Sygnały HP / śmierci
 	player.hp_changed.connect(_on_player_hp_changed)
 	player.died.connect(_on_player_died)
 	enemy.hp_changed.connect(_on_enemy_hp_changed)
 	enemy.defeated.connect(_on_enemy_defeated)
-
 	# Sygnały XP / poziom / staty
 	player.xp_changed.connect(_on_player_xp_changed)
 	player.level_changed.connect(_on_player_level_changed)
 	player.stats_changed.connect(_on_player_stats_changed)
-
 	# Przyciski panelu statystyk
 	if btn_stats:       btn_stats.pressed.connect(_toggle_stats_panel)
 	if btn_str_plus:    btn_str_plus.pressed.connect(_on_btn_str_plus)
@@ -454,47 +459,47 @@ func _ready() -> void:
 	if btn_vit_plus:    btn_vit_plus.pressed.connect(_on_btn_vit_plus)
 	if btn_crit_plus:   btn_crit_plus.pressed.connect(_on_btn_crit_plus)
 	if btn_stats_close: btn_stats_close.pressed.connect(func(): stats_panel.visible = false)
-
 	# Boss choice dialog
 	if dungeon_choice:
 		dungeon_choice.confirmed.connect(_on_dungeon_choice_confirmed)
 		dungeon_choice.canceled.connect(_on_dungeon_choice_canceled)
-
 	# Stan startowy panelu
 	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
 	_apply_stats_panel_font_sizes()
-
 	# Attack
 	turn = Turn.PLAYER
 	if btn_attack:
 		btn_attack.disabled = false
 		btn_attack.pressed.connect(_on_attack_pressed)
-
-	# Next enemy dialog (opcjonalny)
+	# Next enemy dialog
 	if next_dialog:
 		next_dialog.confirmed.connect(Callable(self, "_on_next_enemy_confirmed"))
 	else:
 		push_error("NextEnemyDialog not found.")
 		print_tree()
-
 	player.damaged.connect(_on_player_damaged)
-
 	# XP/Level UI
 	if xp_bar:
 		xp_bar.show_percentage = true
 		_on_player_xp_changed(player.xp, player.xp_to_next)
 	if lbl_level:
 		_on_player_level_changed(player.level, player.stat_points)
-
 	# Potions
 	_update_potions_ui()
 	if btn_use_potion:
 		btn_use_potion.pressed.connect(_on_use_potion_pressed)
 	_ensure_heal_particles()
 
+	# Załaduj statystyki gracza z poprzedniego runa
+	var saved_player := GameState.load_player(player)
+	if not saved_player.is_empty():
+		_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+		_on_player_xp_changed(player.xp, player.xp_to_next)
+		_on_player_level_changed(player.level, player.stat_points)
+	if player.level >= EVOLVE_LEVEL:
+		_show_evolution_choice()
+
 	# Inventory + UI
-	# Jeśli run ma permanenty z poprzednich runów — ładujemy je.
-	# Jeśli inventory jest puste (pierwszy run) — dajemy startowy Rusty Sword.
 	_load_permanent_items_into_inventory()
 	_create_inventory_ui()
 	_refresh_inventory_ui()
@@ -520,6 +525,25 @@ func _ready() -> void:
 	_update_world_background_position()
 
 	# Pierwszy przeciwnik
+
+# Załaduj dungeon wybrany w home_scene
+	var start_idx: int = int(GameState.run.get("dungeon_index", 0))
+	if DUNGEONS.has(start_idx):
+		current_dungeon_index = start_idx
+		current_roster = (DUNGEONS[start_idx]["enemies"] as Array[Dictionary]).duplicate(true)
+	else:
+		current_dungeon_index = 0
+		current_roster = (DUNGEONS[0]["enemies"] as Array[Dictionary]).duplicate(true)
+	_apply_world_background_for_current_dungeon()
+
+	# Załaduj visited_dungeons z GameState
+	var saved_visited: Array = GameState.meta.get("visited_dungeons", [0])
+	visited_dungeons.clear()
+	for v in saved_visited:
+		visited_dungeons.append(int(v))
+	if not visited_dungeons.has(current_dungeon_index):
+		visited_dungeons.append(current_dungeon_index)
+		
 	_spawn_enemy(_pick_enemy())
 		# --- Label aktualnego dungeonu ---
 	lbl_dungeon_name = Label.new()
@@ -548,10 +572,17 @@ func _ready() -> void:
 	set_process_unhandled_input(true)
 	_dev_create_panel()
 
+	# ... koniec _ready() 
+	print("[DEBUG] _ready() END")
+
 
 
 func enter_home() -> void:
-	print("[HOME] entering real home scene...")
+	# Zapisz odwiedzone dungeony do meta
+	GameState.meta["visited_dungeons"] = visited_dungeons.duplicate()
+	GameState.save_player(player, has_evolved, chosen_class)
+	GameState.end_run_to_home()
+	GameState.save(GameState.current_slot)
 	get_tree().change_scene_to_file("res://home_scene.tscn")
 
 
@@ -727,8 +758,10 @@ func _on_next_enemy_confirmed() -> void:
 	set_turn(Turn.PLAYER)
 
 func _process(_d: float) -> void:
-	if Input.is_action_just_pressed("attack") and turn == Turn.PLAYER and player.is_alive() and enemy.is_alive():
-		_on_attack_pressed()
+	if Input.is_action_just_pressed("attack"):
+		print("[DEBUG] Attack key pressed! turn=%s player_alive=%s enemy_alive=%s" % [turn, player.is_alive(), enemy.is_alive()])
+		if turn == Turn.PLAYER and player.is_alive() and enemy.is_alive():
+			_on_attack_pressed()
 	_update_world_background_position()
 
 func _on_attack_pressed() -> void:
@@ -1005,12 +1038,6 @@ func _on_enemy_defeated() -> void:
 		dungeon_level += 1
 		print("[DUNGEON] Level up → dungeon_level=", dungeon_level)
 	if _is_current_boss(killed_name):
-		# 1) Po bossie D1 (Goblin King) – klasyczny wybór: Undead Crypt lub zostań
-		if current_dungeon_index == 0 and killed_name == "Goblin King":
-			_offer_dungeon_choice(killed_name)  # "go to next dungeon" -> Undead Crypt, albo "Stay here"
-			return
-
-		# 2) Od bossa D2 (Lich) oraz w kolejnych dungeonach – losowanie nieodwiedzonych
 		_offer_branch_choice_after_boss()
 		return
 
@@ -1034,8 +1061,6 @@ func _on_player_died() -> void:
 	if btn_attack:
 		btn_attack.disabled = true
  
-	# Powiadom GameState o śmierci (czyści inventory runa, nie rusza permanentów)
-	GameState.on_player_death()
  
 	# Odczekaj chwilę, żeby gracz zobaczył komunikat, potem pokaż Game Over screen
 	await get_tree().create_timer(1.2).timeout
@@ -1043,20 +1068,23 @@ func _on_player_died() -> void:
  
  
 func _show_game_over_screen() -> void:
-	# Overlay przyciemniający
+	# Zapisz śmierć w GameState
+	GameState.on_player_death()
+	GameState.save(GameState.current_slot)
+
+	# Overlay
 	var overlay := ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0)
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.z_index = 300
 	$CanvasLayer.add_child(overlay)
- 
-	# Fade-in
+
 	var tw_fade := get_tree().create_tween()
-	tw_fade.tween_property(overlay, "modulate:a", 0.82, 0.6)
+	tw_fade.tween_property(overlay, "modulate:a", 0.85, 0.6)
 	await tw_fade.finished
- 
-	# Panel
+
+	# Panel — szerszy żeby zmieścić więcej info
 	var panel := PanelContainer.new()
 	panel.z_index = 301
 	var sb := StyleBoxFlat.new()
@@ -1067,81 +1095,115 @@ func _show_game_over_screen() -> void:
 	sb.shadow_size = 14
 	sb.shadow_color = Color(0, 0, 0, 0.6)
 	panel.add_theme_stylebox_override("panel", sb)
- 
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.anchor_top = 0.5
+	panel.anchor_left   = 0.5
+	panel.anchor_right  = 0.5
+	panel.anchor_top    = 0.5
 	panel.anchor_bottom = 0.5
-	panel.offset_left = -240
-	panel.offset_right = 240
-	panel.offset_top = -180
-	panel.offset_bottom = 180
- 
+	panel.offset_left   = -280
+	panel.offset_right  =  280
+	panel.offset_top    = -240
+	panel.offset_bottom =  240
+
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 18)
+	vbox.add_theme_constant_override("separation", 12)
 	panel.add_child(vbox)
- 
-	# Tytuł
+
+	# ── Tytuł ──────────────────────────────────────────
 	var title := Label.new()
 	title.text = "☠  GAME OVER  ☠"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_color_override("font_color", Color(0.9, 0.22, 0.18))
-	title.add_theme_font_size_override("font_size", 42)
-	if DMG_FONT:
-		title.add_theme_font_override("font", DMG_FONT)
+	title.add_theme_font_size_override("font_size", 44)
+	if DMG_FONT: title.add_theme_font_override("font", DMG_FONT)
 	vbox.add_child(title)
- 
-	# Statystyki runa
-	var stats := Label.new()
-	stats.text = "Enemies defeated: %d\nDungeon: %s\nPlayer Level: %d" % [
-		enemies_defeated,
-		String(DUNGEONS[current_dungeon_index]["name"]),
-		player.level
+
+	# ── Separator ──────────────────────────────────────
+	var sep1 := HSeparator.new()
+	sep1.add_theme_color_override("color", Color(0.5, 0.1, 0.1, 0.8))
+	vbox.add_child(sep1)
+
+	# ── Statystyki runa — każda w osobnym wierszu ──────
+	var cls: String = chosen_class.capitalize() if chosen_class != "" else "Novice"
+	var dungeon_name: String = String(DUNGEONS[current_dungeon_index]["name"])
+	var dungeons_visited: int = visited_dungeons.size()
+
+	var run_stats := [
+		["⚔  Enemies defeated",  str(enemies_defeated)],
+		["🏔  Died in",           dungeon_name],
+		["🗺  Dungeons visited",  str(dungeons_visited)],
+		["📊  Level reached",     str(player.level)],
+		["🧙  Class",             cls],
+		["⚔  STR / AGI",         "%d / %d" % [player.strength, player.agility]],
+		["❤  VIT / CRIT",        "%d / %d" % [player.vitality, player.crit]],
 	]
-	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	stats.add_theme_color_override("font_color", Color(0.85, 0.80, 0.75))
-	stats.add_theme_font_size_override("font_size", 20)
-	if DMG_FONT:
-		stats.add_theme_font_override("font", DMG_FONT)
-	vbox.add_child(stats)
- 
-	# Nota o permanentach
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 20)
+	grid.add_theme_constant_override("v_separation", 6)
+	vbox.add_child(grid)
+
+	for row in run_stats:
+		var lbl_key := Label.new()
+		lbl_key.text = str(row[0])
+		lbl_key.add_theme_font_size_override("font_size", 17)
+		lbl_key.add_theme_color_override("font_color", Color(0.70, 0.67, 0.63))
+		if DMG_FONT: lbl_key.add_theme_font_override("font", DMG_FONT)
+
+		var lbl_val := Label.new()
+		lbl_val.text = str(row[1])
+		lbl_val.add_theme_font_size_override("font_size", 17)
+		lbl_val.add_theme_color_override("font_color", Color(1.0, 0.95, 0.80))
+		if DMG_FONT: lbl_val.add_theme_font_override("font", DMG_FONT)
+
+		grid.add_child(lbl_key)
+		grid.add_child(lbl_val)
+
+	# ── Separator ──────────────────────────────────────
+	var sep2 := HSeparator.new()
+	sep2.add_theme_color_override("color", Color(0.5, 0.1, 0.1, 0.8))
+	vbox.add_child(sep2)
+
+	# ── Nota o permanentach ────────────────────────────
+	var perm_count := 0
+	var chest: Dictionary = GameState.meta.get("permanent_chest", {})
+	for s in chest:
+		perm_count += (chest[s] as Array).size()
+
 	var perm_note := Label.new()
-	perm_note.text = "Your PERMANENT items are safe in the chest."
+	perm_note.text = "💎 %d permanent item(s) safe in your chest." % perm_count
 	perm_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	perm_note.add_theme_color_override("font_color", Color(0.55, 0.90, 0.45))
 	perm_note.add_theme_font_size_override("font_size", 16)
-	if DMG_FONT:
-		perm_note.add_theme_font_override("font", DMG_FONT)
+	if DMG_FONT: perm_note.add_theme_font_override("font", DMG_FONT)
 	vbox.add_child(perm_note)
- 
-	# Przyciski
+
+	# ── Przyciski ──────────────────────────────────────
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 16)
 	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	vbox.add_child(btn_row)
- 
+
 	var btn_retry := _make_styled_button("▶  Play Again", Color(0.95, 0.82, 0.30))
-	var btn_home  := _make_styled_button("🏠  Main Menu", Color(0.55, 0.75, 1.0))
+	var btn_home  := _make_styled_button("🏠  Return Home", Color(0.55, 0.75, 1.0))
 	btn_row.add_child(btn_retry)
 	btn_row.add_child(btn_home)
- 
+
 	btn_retry.pressed.connect(func():
 		get_tree().reload_current_scene()
 	)
 	btn_home.pressed.connect(func():
 		get_tree().change_scene_to_file("res://home_scene.tscn")
 	)
- 
+
 	$CanvasLayer.add_child(panel)
- 
+
 	# Pop-in animacja
 	panel.modulate = Color(1, 1, 1, 0)
 	panel.scale = Vector2(0.88, 0.88)
 	var tw_in := get_tree().create_tween()
 	tw_in.tween_property(panel, "modulate:a", 1.0, 0.22)
 	tw_in.parallel().tween_property(panel, "scale", Vector2(1, 1), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
- 
  
 # Pomocnicza funkcja do tworzenia przycisków Game Over screena
 func _make_styled_button(label_text: String, col: Color) -> Button:
@@ -1229,103 +1291,254 @@ func _on_player_level_changed(level: int, _stat_points: int) -> void:
 		_show_evolution_choice()
 	_open_stats_panel_auto_on_level_up()
 
-func _play_d20_animation(final_roll:int) -> void:
-	var overlay := ColorRect.new()
-	overlay.color = Color(0, 0, 0, 0.45)
-	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-
-	var box := CenterContainer.new()
-	box.set_anchors_preset(Control.PRESET_FULL_RECT)
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-
-	var lbl := Label.new()
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.text = "–"
-	if DMG_FONT:
-		lbl.add_theme_font_override("font", DMG_FONT)
-	lbl.add_theme_font_size_override("font_size", 150)
-	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	lbl.add_theme_constant_override("outline_size", 8)
-	lbl.modulate = Color(1, 1, 1)
-	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
-
-	box.add_child(lbl)
-	overlay.add_child(box)
-
-	# --- D20 icon (bottom-left) ---
-	var D20_TEX_PATH := "res://ui/d20.png" # <- podmień, jeśli masz inną ścieżkę
-	var dice := TextureRect.new()
-	var dtex := load(D20_TEX_PATH)
-	if dtex is Texture2D:
-		dice.texture = dtex
-	dice.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	dice.size = Vector2(96, 96)                    # docelowy rozmiar ikony
-	dice.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	# margines 16 px od krawędzi
-	dice.offset_left = 16
-	dice.offset_bottom = 16
-	dice.offset_right = dice.offset_left + dice.size.x
-	dice.offset_top = dice.offset_bottom - dice.size.y
-	overlay.add_child(dice)
-	# --- /D20 icon ---
-
-	var layer := $CanvasLayer
-	if layer:
-		layer.add_child(overlay)
-	else:
-		$CanvasLayer/UIRoot.add_child(overlay)
-	overlay.move_to_front()
-
-	var steps := 14
-	for i in range(steps):
-		lbl.text = str(randi_range(1, 20))
-		lbl.scale = Vector2(1.15, 1.15)
-		lbl.rotation = deg_to_rad(randf_range(-4, 4))
-		var t_pop := get_tree().create_tween()
-		t_pop.tween_property(lbl, "scale", Vector2(1, 1), 0.06).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		await get_tree().create_timer(0.02 + i * 0.015).timeout
+func _play_d20_animation(final_roll: int) -> void:
+	if not dice_display or not dice_roller:
+		return
 
 	var is_crit := (final_roll == CRIT)
 	var is_miss := (final_roll < HIT_DC)
-	lbl.text = str(final_roll)
 
-	if is_crit:
-		lbl.modulate = Color(1.0, 0.95, 0.3)
-	elif is_miss:
-		lbl.modulate = Color(0.6, 0.6, 0.6)
-	else:
-		lbl.modulate = Color(1, 1, 1)
+	# Losowe miejsce lądowania w okolicach centrum
+	var rand_offset := Vector2(randf_range(-60, 60), randf_range(-30, 30))
+	var land_pos := Vector2(
+		get_viewport_rect().size.x / 2.0 - 250,
+		get_viewport_rect().size.y / 2.0 - 250
+	) + rand_offset
 
-	var tw := get_tree().create_tween()
-	tw.tween_property(lbl, "scale", Vector2(1.4, 1.4), 0.08).from(Vector2(1, 1))
-	tw.parallel().tween_property(lbl, "rotation", 0.0, 0.1)
-	if is_crit:
-		tw.parallel().tween_property(lbl, "modulate", Color(1.0, 1.0, 0.6), 0.08).from(lbl.modulate)
-	elif is_miss:
-		tw.parallel().tween_property(lbl, "modulate", Color(0.5, 0.5, 0.5), 0.08).from(lbl.modulate)
-	await tw.finished
+	# Startowa pozycja — za lewą krawędzią
+	dice_display.position = Vector2(-600, land_pos.y)
+	dice_display.modulate = Color(1, 1, 1, 1)
+	dice_display.visible = true
 
+	# Obracaj DiceDisplay podczas wjazdu — symuluje toczenie się po stole
+	dice_display.pivot_offset = Vector2(250, 250)
+	var tw_spin := get_tree().create_tween()
+	tw_spin.set_loops(0)
+	tw_spin.tween_property(dice_display, "rotation_degrees", 360.0, 0.4)
+
+	# Wjazd poziomo — prosta linia
+	var tw_in := get_tree().create_tween()
+	tw_in.set_ease(Tween.EASE_OUT)
+	tw_in.set_trans(Tween.TRANS_CUBIC)
+	tw_in.tween_property(dice_display, "position:x", land_pos.x, 0.5)
+
+	# Pokaż właściwą ścianę PODCZAS lotu — zmiana niewidoczna dla gracza
+
+	var faces: Array[int] = [final_roll]
+	dice_roller.show_faces(faces)
+	# Ukryj highlight na każdej kostce
+	await get_tree().create_timer(0.35).timeout
+	for dice in dice_roller.dices:
+		dice.dehighlight()
+
+	await tw_in.finished
+
+	# Zatrzymaj obrót — kostka stoi nieruchomo z właściwym wynikiem
+	tw_spin.kill()
+	dice_display.rotation_degrees = 0.0
+	await _dice_burst_effect(is_crit, is_miss, land_pos)
+
+
+	# Shake kamery
 	if is_crit:
 		shake_camera(10.0, 0.2)
 	elif is_miss:
 		shake_camera(4.0, 0.15)
 
-	await get_tree().create_timer(0.25).timeout
+	await get_tree().create_timer(0.8).timeout
 
-	var flash := ColorRect.new()
-	flash.color = Color(1, 1, 1, 0.6)
-	flash.set_anchors_preset(Control.PRESET_FULL_RECT)
-	overlay.add_child(flash)
-	var tw_flash := get_tree().create_tween()
-	tw_flash.tween_property(flash, "modulate:a", 0.0, 0.2)
-	tw_flash.tween_property(overlay, "modulate:a", 0.0, 0.25).set_delay(0.05)
-	await tw_flash.finished
+	# Wylot w prawo
+	var tw_out := get_tree().create_tween()
+	tw_out.set_ease(Tween.EASE_IN)
+	tw_out.set_trans(Tween.TRANS_CUBIC)
+	tw_out.tween_property(dice_display, "position:x", get_viewport_rect().size.x + 200, 0.35)
+	await tw_out.finished
 
-	overlay.queue_free()
+	dice_display.rotation_degrees = 0.0
+	dice_display.visible = false
+
+# ─────────────────────────────────────────────────────────────
+# DICE BURST PARTICLES
+# Wywołaj w _play_d20_animation() po await tw_in.finished:
+#   await _dice_burst_effect(is_crit, is_miss, land_pos)
+# ─────────────────────────────────────────────────────────────
+
+func _dice_burst_effect(is_crit: bool, is_miss: bool, land_pos: Vector2) -> void:
+	var center := land_pos + Vector2(250, 250)
+
+	if is_crit:
+		# Złote iskry — główna eksplozja
+		_spawn_dice_particles(center, {
+			"amount":        80,
+			"lifetime":      1.1,
+			"explosiveness": 0.92,
+			"velocity_min":  220.0,
+			"velocity_max":  420.0,
+			"scale_min":     3.5,
+			"scale_max":     7.5,
+			"gravity":       180.0,
+			"color_start":   Color(1.0,  0.95, 0.25, 1.0),
+			"color_end":     Color(1.0,  0.55, 0.0,  0.0),
+			"damping_min":   60.0,
+			"damping_max":   120.0,
+		})
+		# Białe drobinki — drugie pasmo
+		_spawn_dice_particles(center, {
+			"amount":        50,
+			"lifetime":      0.75,
+			"explosiveness": 0.97,
+			"velocity_min":  140.0,
+			"velocity_max":  300.0,
+			"scale_min":     2.0,
+			"scale_max":     4.5,
+			"gravity":       120.0,
+			"color_start":   Color(1.0,  1.0,  1.0,  1.0),
+			"color_end":     Color(0.95, 0.85, 0.3,  0.0),
+			"damping_min":   40.0,
+			"damping_max":   80.0,
+		})
+		# Centralny rozbłysk
+		_spawn_dice_glow(center, Color(1.0, 0.92, 0.2, 0.85), 280.0, 0.45)
+		shake_camera(10.0, 0.22)
+
+	elif is_miss:
+		# Szary dym — leniwe cząsteczki unoszą się w górę
+		_spawn_dice_particles(center, {
+			"amount":        35,
+			"lifetime":      1.4,
+			"explosiveness": 0.35,
+			"velocity_min":  40.0,
+			"velocity_max":  110.0,
+			"scale_min":     5.0,
+			"scale_max":     11.0,
+			"gravity":       -30.0,   # ujemna — dym idzie w górę
+			"color_start":   Color(0.65, 0.63, 0.68, 0.75),
+			"color_end":     Color(0.50, 0.48, 0.52, 0.0),
+			"damping_min":   20.0,
+			"damping_max":   50.0,
+		})
+		shake_camera(3.0, 0.12)
+
+	else:
+		# Hit — złote iskry, umiarkowane
+		_spawn_dice_particles(center, {
+			"amount":        45,
+			"lifetime":      0.85,
+			"explosiveness": 0.88,
+			"velocity_min":  150.0,
+			"velocity_max":  280.0,
+			"scale_min":     2.5,
+			"scale_max":     5.5,
+			"gravity":       160.0,
+			"color_start":   Color(1.0,  0.88, 0.15, 1.0),
+			"color_end":     Color(0.95, 0.45, 0.0,  0.0),
+			"damping_min":   50.0,
+			"damping_max":   100.0,
+		})
+		_spawn_dice_glow(center, Color(1.0, 0.85, 0.1, 0.55), 180.0, 0.30)
+
+	# Poczekaj aż efekt wybrzmi
+	var wait := 1.1 if is_crit else (1.4 if is_miss else 0.85)
+	await get_tree().create_timer(wait * 0.55).timeout
+
+
+func _spawn_dice_particles(center: Vector2, cfg: Dictionary) -> void:
+	var p := GPUParticles2D.new()
+	p.z_index      = 320
+	p.position     = center
+	p.one_shot     = true
+	p.emitting     = false
+	p.amount       = int(cfg["amount"])
+	p.lifetime     = float(cfg["lifetime"])
+	p.explosiveness = float(cfg["explosiveness"])
+	p.speed_scale  = 1.0
+
+	var mat := ParticleProcessMaterial.new()
+	mat.emission_shape          = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	mat.emission_sphere_radius  = 18.0
+	mat.direction               = Vector3(0, 0, 0)
+	mat.spread                  = 180.0
+	mat.initial_velocity_min    = float(cfg["velocity_min"])
+	mat.initial_velocity_max    = float(cfg["velocity_max"])
+	mat.gravity                 = Vector3(0, float(cfg["gravity"]), 0)
+	mat.damping_min             = float(cfg["damping_min"])
+	mat.damping_max             = float(cfg["damping_max"])
+	mat.scale_min               = float(cfg["scale_min"])
+	mat.scale_max               = float(cfg["scale_max"])
+	mat.angle_min               = 0.0
+	mat.angle_max               = 360.0
+	mat.angular_velocity_min    = -180.0
+	mat.angular_velocity_max    =  180.0
+
+	# Gradient koloru: start → end (fade out)
+	var grad := Gradient.new()
+	grad.set_color(0, cfg["color_start"] as Color)
+	grad.add_point(1.0, cfg["color_end"] as Color)
+	var grad_tex := GradientTexture1D.new()
+	grad_tex.gradient = grad
+	mat.color_ramp = grad_tex
+
+	p.process_material = mat
+
+	# Tekstura — mały okrąg (rozmyty)
+	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for x in 16:
+		for y in 16:
+			var dx: float = x - 7.5
+			var dy: float = y - 7.5
+			var dist: float = sqrt(dx*dx + dy*dy)
+			var alpha: float = clamp(1.0 - dist / 7.5, 0.0, 1.0)
+			alpha = alpha * alpha  # miękka krawędź
+			img.set_pixel(x, y, Color(1, 1, 1, alpha))
+	var tex := ImageTexture.create_from_image(img)
+	p.texture = tex
+
+	$CanvasLayer.add_child(p)
+	p.emitting = true
+
+	# Auto-usuń po zakończeniu
+	var cleanup_time: float = float(cfg["lifetime"]) + 0.3
+	get_tree().create_timer(cleanup_time).timeout.connect(func():
+		if is_instance_valid(p): p.queue_free()
+	)
+
+
+func _spawn_dice_glow(center: Vector2, col: Color, radius: float, duration: float) -> void:
+	# Centralny rozbłysk — okrąg który szybko wybucha i znika
+	var glow := ColorRect.new()
+	glow.color        = col
+	glow.size         = Vector2(radius, radius)
+	glow.position     = center - Vector2(radius * 0.5, radius * 0.5)
+	glow.pivot_offset = Vector2(radius * 0.5, radius * 0.5)
+	glow.scale        = Vector2(0.1, 0.1)
+	glow.z_index      = 315
+
+	# Zaokrąglony wygląd przez shader
+	var shader_code := """
+shader_type canvas_item;
+void fragment() {
+	vec2 uv = UV - vec2(0.5);
+	float dist = length(uv);
+	float alpha = smoothstep(0.5, 0.2, dist);
+	COLOR = vec4(COLOR.rgb, COLOR.a * alpha);
+}
+"""
+	var shader := Shader.new()
+	shader.code = shader_code
+	var shader_mat := ShaderMaterial.new()
+	shader_mat.shader = shader
+	glow.material = shader_mat
+
+	$CanvasLayer.add_child(glow)
+
+	# Pop-in → fade-out
+	var tw := get_tree().create_tween()
+	tw.tween_property(glow, "scale", Vector2(1.0, 1.0), duration * 0.3)\
+		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
+	tw.tween_property(glow, "modulate:a", 0.0, duration * 0.7)\
+		.set_trans(Tween.TRANS_QUAD)
+	tw.tween_callback(glow.queue_free)
 
 
 
@@ -1347,6 +1560,7 @@ func _switch_to_dungeon(idx:int) -> void:
 	# Zapisz jako odwiedzony
 	if not visited_dungeons.has(idx):
 		visited_dungeons.append(idx)
+		GameState.meta["visited_dungeons"] = visited_dungeons.duplicate()
 
 	if lbl_log:
 		lbl_log.text = "Entering: %s" % String(DUNGEONS[idx]["name"])
@@ -1722,6 +1936,9 @@ func _switch_to_next_dungeon() -> void:
 
 # --- Evolution UI ---
 func _show_evolution_choice() -> void:
+	if GameState.has_class():
+		_apply_class_evolution(GameState.get_chosen_class())
+		return
 	if btn_attack:
 		btn_attack.disabled = true
 	var win := Window.new()
@@ -1850,6 +2067,9 @@ func _apply_class_evolution(key: String) -> void:
 	# zapamiętaj klasę
 	has_evolved = true
 	chosen_class = key
+		# Zapisz klasę permanentnie w meta
+	GameState.set_class(key)
+	GameState.save(GameState.current_slot)
 
 	# nadaj aktywne/pasywne skille dla klasy (slot [2] + pasywka)
 	_grant_class_skills(key)
@@ -3377,20 +3597,32 @@ func _dungeon_name(idx:int) -> String:
 		return String(DUNGEONS[idx]["name"])
 	return "Unknown"
 
-func _offer_branch_choice_after_boss() -> void:
-	var candidates := _unvisited_candidate_dungeons()
-	if candidates.is_empty():
-		# brak nowych – wracamy do Twojej dotychczasowej ścieżki
-		_switch_to_next_dungeon()
-		return
+func _return_home_after_boss() -> void:
+	print("[BOSS] Returning home — loadout saved to permanent_chest")
+	# end_run_to_home() przenosi run["loadout"] z powrotem do permanent_chest
+	GameState.end_run_to_home()
+	# Zapisz progres (opcjonalnie — możesz to przenieść do home_scene)
+	GameState.save(1)
+	# Zmień scenę na home
+	get_tree().change_scene_to_file("res://home_scene.tscn")
 
-	candidates.shuffle()
-	var selections := candidates.slice(0, min(2, candidates.size()))  # 1 lub 2
+
+func _offer_branch_choice_after_boss() -> void:
+	# Pobierz połączone dungeony których jeszcze nie odwiedzono
+	var connected: Array = DUNGEON_CONNECTIONS.get(current_dungeon_index, [])
+	var candidates: Array[int] = []
+	for idx in connected:
+		if not visited_dungeons.has(idx):
+			candidates.append(idx)
+	# Jeśli wszystkie odwiedzone — pokaż odwiedzone jako opcje (żeby nie blokować gry)
+	if candidates.is_empty():
+		for idx in connected:
+			candidates.append(idx)
 
 	var win := Window.new()
-	win.title = "Choose your next path"
+	win.title = "Boss defeated!"
 	win.unresizable = true
-	win.size = Vector2i(560, 280)
+	win.size = Vector2i(600, 320)
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 14)
@@ -3399,7 +3631,7 @@ func _offer_branch_choice_after_boss() -> void:
 	win.add_child(root)
 
 	var lbl := Label.new()
-	lbl.text = "Boss defeated!\nChoose your next destination:"
+	lbl.text = "Boss defeated!\nChoose your next path:"
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.add_theme_font_size_override("font_size", 20)
 	if DMG_FONT: lbl.add_theme_font_override("font", DMG_FONT)
@@ -3410,18 +3642,36 @@ func _offer_branch_choice_after_boss() -> void:
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	root.add_child(row)
 
-	for idx in selections:
+	# Przyciski dungeonów
+	for idx in candidates:
 		var b := Button.new()
-		b.text = _dungeon_name(idx)
-		b.custom_minimum_size = Vector2(220, 64)
-		b.add_theme_font_size_override("font_size", 18)
+		b.text = "➤  " + _dungeon_name(idx)
+		b.custom_minimum_size = Vector2(200, 64)
+		b.add_theme_font_size_override("font_size", 17)
+		if DMG_FONT: b.add_theme_font_override("font", DMG_FONT)
 		b.pressed.connect(func():
-			_switch_to_dungeon(idx)
 			if is_instance_valid(win): win.queue_free()
+			_switch_to_dungeon(idx)
 		)
 		row.add_child(b)
 
-	# Zatrzymaj atak na czas wyboru
+	# Przycisk powrotu do domu
+	var home_btn := Button.new()
+	home_btn.text = "🏠  Return Home"
+	home_btn.custom_minimum_size = Vector2(200, 64)
+	home_btn.add_theme_font_size_override("font_size", 17)
+	if DMG_FONT: home_btn.add_theme_font_override("font", DMG_FONT)
+	home_btn.add_theme_color_override("font_color", Color(0.55, 0.90, 0.45))
+	home_btn.pressed.connect(func():
+		if is_instance_valid(win): win.queue_free()
+		GameState.meta["visited_dungeons"] = visited_dungeons.duplicate()
+		GameState.save_player(player, has_evolved, chosen_class)
+		GameState.end_run_to_home()
+		GameState.save(GameState.current_slot)
+		get_tree().change_scene_to_file("res://home_scene.tscn")
+	)
+	row.add_child(home_btn)
+
 	if btn_attack: btn_attack.disabled = true
 
 	if $CanvasLayer:
@@ -4285,6 +4535,7 @@ func _dev_create_panel() -> void:
 	vbox.add_child(_dev_section_label("EVENTY"))
 	vbox.add_child(_dev_btn("⚡ Wywołaj Shrine",    func(): _dev_trigger_shrine()))
 	vbox.add_child(_dev_btn("📦 Wywołaj Chest",     func(): _dev_trigger_chest()))
+	vbox.add_child(_dev_btn("💀 Wywołaj bossa",     func(): _dev_spawn_boss()))
 	vbox.add_child(_dev_btn("🏠 Wróć do domu",      func(): _dev_goto_home()))
 
 	vbox.add_child(_dev_separator())
@@ -4366,7 +4617,36 @@ func _dev_separator() -> HSeparator:
 
 # --- akcje DEV ---
 func _dev_goto_home() -> void:
+	GameState.save_player(player, has_evolved, chosen_class)
+	GameState.end_run_to_home()
+	GameState.save(GameState.current_slot)
+	GameState.meta["visited_dungeons"] = visited_dungeons.duplicate()
 	get_tree().change_scene_to_file("res://home_scene.tscn")
+
+func _dev_spawn_boss() -> void:
+	var boss_names := {
+		0: "Goblin King",
+		1: "Lich",
+		2: "High King of Peaks",
+		3: "Orc Warlord",
+		4: "Dread Matriarch",
+		5: "Ancient Worldroot"
+	}
+	var boss_name: String = boss_names.get(current_dungeon_index, "")
+	if boss_name == "":
+		_show_toast("No boss for this dungeon!", 1.5)
+		return
+	# Znajdź bossa w rosterze aktualnego dungeonu
+	var boss_data: Dictionary = {}
+	for e in DUNGEONS[current_dungeon_index]["enemies"]:
+		if e["name"] == boss_name:
+			boss_data = e.duplicate(true)
+			break
+	if boss_data.is_empty():
+		_show_toast("Boss not found in roster!", 1.5)
+		return
+	_request_spawn(boss_data)
+	_show_toast("💀 " + boss_name + " appears!", 1.5)
 
 func _dev_trigger_shrine() -> void:
 	if _shrine_in_progress or _shrine_dialog_open:

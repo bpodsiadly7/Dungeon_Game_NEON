@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3 uid="uid://di8s4oahhme5"]
+[gd_scene load_steps=15 format=3 uid="uid://di8s4oahhme5"]
 
 [ext_resource type="Script" uid="uid://bednyshjiftkh" path="res://main.gd" id="1_1bvp3"]
 [ext_resource type="Texture2D" uid="uid://b843slb3i1pcu" path="res://player_classes/dwarf_novice.png" id="2_7mycd"]
@@ -6,6 +6,9 @@
 [ext_resource type="Script" uid="uid://t1pr0as8p8mt" path="res://enemy.gd" id="3_h2yge"]
 [ext_resource type="FontFile" uid="uid://c1k21tdit3e3h" path="res://MedievalSharp-Bold.ttf" id="5_lquwl"]
 [ext_resource type="Texture2D" uid="uid://ihibyfbpnyik" path="res://ikony/HpBottleIcon.png" id="6_7mycd"]
+[ext_resource type="PackedScene" uid="uid://cnlssqpge8erk" path="res://addons/dice_roller/dice_roller/dice_roller.tscn" id="7_kek77"]
+[ext_resource type="Script" uid="uid://cohd4ovwrydr0" path="res://addons/dice_roller/dice_def.gd" id="8_4c57u"]
+[ext_resource type="Script" uid="uid://xsgh2gwr4gub" path="res://addons/dice_roller/dice_shape.gd" id="9_efxa6"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_lquwl"]
 bg_color = Color(0.8985114, 0, 0.2924933, 1)
@@ -17,6 +20,19 @@ corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 corner_detail = 6
+
+[sub_resource type="ViewportTexture" id="ViewportTexture_kek77"]
+viewport_path = NodePath("DiceViewport")
+
+[sub_resource type="Resource" id="Resource_4c57u"]
+script = ExtResource("9_efxa6")
+name = "D20"
+metadata/_custom_type_script = "uid://xsgh2gwr4gub"
+
+[sub_resource type="Resource" id="Resource_efxa6"]
+script = ExtResource("8_4c57u")
+shape = SubResource("Resource_4c57u")
+metadata/_custom_type_script = "uid://cohd4ovwrydr0"
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_1bvp3")
@@ -303,3 +319,47 @@ text = "Close"
 title = "Dungeon Cleared!"
 ok_button_text = "Go to next dungeon"
 cancel_button_text = "Stay here"
+
+[node name="DiceDisplay" type="TextureRect" parent="CanvasLayer/UIRoot"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -600.0
+offset_top = 360.0
+offset_right = -1508.0
+offset_bottom = 68.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = SubResource("ViewportTexture_kek77")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DiceViewport" type="SubViewport" parent="."]
+transparent_bg = true
+handle_input_locally = false
+gui_disable_input = true
+size = Vector2i(1024, 1024)
+
+[node name="Camera3D" type="Camera3D" parent="DiceViewport"]
+transform = Transform3D(1, 0, 0, 0, 0.93969256, 0.3420201, 0, -0.3420201, 0.93969256, 0, 3, 6)
+fov = 45.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="DiceViewport"]
+light_energy = 0.881
+light_indirect_energy = 1.492
+light_volumetric_fog_energy = 3.051
+shadow_enabled = true
+shadow_blur = 1.95
+directional_shadow_max_distance = 332.5
+sky_mode = 1
+
+[node name="DiceRoller" parent="DiceViewport" instance=ExtResource("7_kek77")]
+dice_set = Array[ExtResource("8_4c57u")]([SubResource("Resource_efxa6")])
+roller_color = Color(0, 0.39151636, 0, 0)
+
+[node name="OmniLight3D" type="OmniLight3D" parent="DiceViewport"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, 0)
+light_color = Color(0.95281494, 0.9776916, 1, 1)
+light_energy = 0.3

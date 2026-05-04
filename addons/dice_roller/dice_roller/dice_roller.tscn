@@ -7,14 +7,11 @@
 
 [sub_resource type="Resource" id="Resource_lmc47"]
 script = ExtResource("3_1uab6")
-name = "D6"
 
 [sub_resource type="Resource" id="Resource_qf6gv"]
 script = ExtResource("2_qf6gv")
-name = "Dice"
 color = Color(0.980392, 0.921569, 0.843137, 1)
 shape = SubResource("Resource_lmc47")
-sides = 0
 metadata/_custom_type_script = "uid://cohd4ovwrydr0"
 
 [node name="DiceRoller" type="Node3D"]

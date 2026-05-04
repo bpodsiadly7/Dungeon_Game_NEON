@@ -21,6 +21,7 @@ physics_material_override = SubResource("PhysicsMaterial_gg0cj")
 script = ExtResource("1_10iax")
 
 [node name="CSGBox3D" type="CSGBox3D" parent="."]
+visible = false
 use_collision = true
 flip_faces = true
 size = Vector3(10, 16, 6)
