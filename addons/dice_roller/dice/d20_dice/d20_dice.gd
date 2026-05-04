@@ -1,5 +1,4 @@
 @icon("./d20_dice.svg")
-class_name D20Dice
 extends Dice
 
 """
