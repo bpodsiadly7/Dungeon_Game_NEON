@@ -1367,80 +1367,108 @@ func _dice_burst_effect(is_crit: bool, is_miss: bool, land_pos: Vector2) -> void
 	var center := land_pos + Vector2(250, 250)
 
 	if is_crit:
-		# Złote iskry — główna eksplozja
+		# Główne złote iskry — ostre i szybkie jak w FF
 		_spawn_dice_particles(center, {
-			"amount":        80,
-			"lifetime":      1.1,
-			"explosiveness": 0.92,
-			"velocity_min":  220.0,
-			"velocity_max":  420.0,
-			"scale_min":     3.5,
-			"scale_max":     7.5,
-			"gravity":       180.0,
-			"color_start":   Color(1.0,  0.95, 0.25, 1.0),
-			"color_end":     Color(1.0,  0.55, 0.0,  0.0),
-			"damping_min":   60.0,
-			"damping_max":   120.0,
-		})
-		# Białe drobinki — drugie pasmo
-		_spawn_dice_particles(center, {
-			"amount":        50,
-			"lifetime":      0.75,
-			"explosiveness": 0.97,
-			"velocity_min":  140.0,
-			"velocity_max":  300.0,
+			"amount":        60,
+			"lifetime":      0.6,
+			"explosiveness": 0.98,
+			"velocity_min":  260.0,
+			"velocity_max":  480.0,
 			"scale_min":     2.0,
-			"scale_max":     4.5,
-			"gravity":       120.0,
-			"color_start":   Color(1.0,  1.0,  1.0,  1.0),
-			"color_end":     Color(0.95, 0.85, 0.3,  0.0),
+			"scale_max":     4.0,        # mniejsze = bardziej pixel-art
+			"gravity":       220.0,
+			"color_start":   Color(1.0,  1.0,  0.5,  0.9),
+			"color_end":     Color(1.0,  0.6,  0.0,  0.0),
+			"damping_min":   80.0,
+			"damping_max":   160.0,
+		})
+		# Białe mikro-iskierki — drugie pasmo
+		_spawn_dice_particles(center, {
+			"amount":        40,
+			"lifetime":      0.4,
+			"explosiveness": 1.0,
+			"velocity_min":  180.0,
+			"velocity_max":  350.0,
+			"scale_min":     1.0,
+			"scale_max":     2.5,        # bardzo małe — pixel feel
+			"gravity":       150.0,
+			"color_start":   Color(1.0,  1.0,  1.0,  0.85),
+			"color_end":     Color(1.0,  0.9,  0.4,  0.0),
+			"damping_min":   60.0,
+			"damping_max":   100.0,
+		})
+		# Krzyżowy rozbłysk zamiast okrągłego glow
+		_spawn_dice_glow(center, Color(1.0, 0.95, 0.3, 0.7), 220.0, 0.22)
+		shake_camera(10.0, 0.18)
+
+	elif is_miss:
+		# Klasyczne JRPG miss — małe szare iskierki zamiast dymu
+		_spawn_dice_particles(center, {
+			"amount":        18,
+			"lifetime":      0.65,
+			"explosiveness": 0.75,
+			"velocity_min":  60.0,
+			"velocity_max":  140.0,
+			"scale_min":     2.0,
+			"scale_max":     4.0,        # małe i ostre
+			"gravity":       80.0,
+			"color_start":   Color(0.8,  0.8,  0.85, 0.7),
+			"color_end":     Color(0.5,  0.5,  0.55, 0.0),
 			"damping_min":   40.0,
 			"damping_max":   80.0,
 		})
-		# Centralny rozbłysk
-		_spawn_dice_glow(center, Color(1.0, 0.92, 0.2, 0.85), 280.0, 0.45)
-		shake_camera(10.0, 0.22)
-
-	elif is_miss:
-		# Szary dym — leniwe cząsteczki unoszą się w górę
+		# Drugi layer — ciemniejsze, opadające
 		_spawn_dice_particles(center, {
-			"amount":        35,
-			"lifetime":      1.4,
-			"explosiveness": 0.35,
-			"velocity_min":  40.0,
-			"velocity_max":  110.0,
-			"scale_min":     5.0,
-			"scale_max":     11.0,
-			"gravity":       -30.0,   # ujemna — dym idzie w górę
-			"color_start":   Color(0.65, 0.63, 0.68, 0.75),
-			"color_end":     Color(0.50, 0.48, 0.52, 0.0),
+			"amount":        12,
+			"lifetime":      0.5,
+			"explosiveness": 0.6,
+			"velocity_min":  30.0,
+			"velocity_max":  80.0,
+			"scale_min":     1.5,
+			"scale_max":     3.0,
+			"gravity":       60.0,
+			"color_start":   Color(0.55, 0.53, 0.58, 0.5),
+			"color_end":     Color(0.3,  0.3,  0.35, 0.0),
 			"damping_min":   20.0,
 			"damping_max":   50.0,
 		})
-		shake_camera(3.0, 0.12)
+		shake_camera(3.0, 0.10)
 
 	else:
-		# Hit — złote iskry, umiarkowane
+		# Hit — pomarańczowo-czerwony, energiczny
 		_spawn_dice_particles(center, {
-			"amount":        45,
-			"lifetime":      0.85,
-			"explosiveness": 0.88,
-			"velocity_min":  150.0,
-			"velocity_max":  280.0,
-			"scale_min":     2.5,
-			"scale_max":     5.5,
-			"gravity":       160.0,
-			"color_start":   Color(1.0,  0.88, 0.15, 1.0),
-			"color_end":     Color(0.95, 0.45, 0.0,  0.0),
-			"damping_min":   50.0,
-			"damping_max":   100.0,
+			"amount":        35,
+			"lifetime":      0.5,
+			"explosiveness": 0.95,
+			"velocity_min":  200.0,
+			"velocity_max":  340.0,
+			"scale_min":     2.0,
+			"scale_max":     4.5,
+			"gravity":       200.0,
+			"color_start":   Color(1.0,  0.55, 0.05, 0.85),
+			"color_end":     Color(0.8,  0.2,  0.0,  0.0),
+			"damping_min":   60.0,
+			"damping_max":   110.0,
 		})
-		_spawn_dice_glow(center, Color(1.0, 0.85, 0.1, 0.55), 180.0, 0.30)
+		# Żółty rdzeń — krótki błysk
+		_spawn_dice_particles(center, {
+			"amount":        20,
+			"lifetime":      0.3,
+			"explosiveness": 1.0,
+			"velocity_min":  100.0,
+			"velocity_max":  220.0,
+			"scale_min":     1.5,
+			"scale_max":     3.0,
+			"gravity":       120.0,
+			"color_start":   Color(1.0,  1.0,  0.6,  0.7),
+			"color_end":     Color(1.0,  0.7,  0.1,  0.0),
+			"damping_min":   40.0,
+			"damping_max":   80.0,
+		})
+		_spawn_dice_glow(center, Color(1.0, 0.6, 0.1, 0.45), 160.0, 0.16)
 
-	# Poczekaj aż efekt wybrzmi
-	var wait := 1.1 if is_crit else (1.4 if is_miss else 0.85)
+	var wait := 0.6 if is_crit else (0.65 if is_miss else 0.5)
 	await get_tree().create_timer(wait * 0.55).timeout
-
 
 func _spawn_dice_particles(center: Vector2, cfg: Dictionary) -> void:
 	var p := GPUParticles2D.new()
