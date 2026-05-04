@@ -379,7 +379,7 @@ const ORC_ENEMIES: Array[Dictionary] = [
 	{"name":"Blackguard",      "hp":134, "damage":36, "difficulty":4, "xp":78, "tex":"res://orcs/blackguard.png"},
 	{"name":"Warmaster",       "hp":150, "damage":40, "difficulty":5, "xp":88, "tex":"res://orcs/warmaster.png"},
 	{"name":"Orc Warlord",     "hp":260, "damage":42, "difficulty":5, "xp":140,"tex":"res://orcs/orc_warlord.png"},
-]
+] 
 
 # --- Dungeon 5: Dark Elf Depths ---
 const DARK_ELF_ENEMIES: Array[Dictionary] = [
