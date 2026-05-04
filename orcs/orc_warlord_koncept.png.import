@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://41vk3d3bneit"
-path="res://.godot/imported/ChatGPT Image 5 maj 2026, 00_09_14.png-30360257a1d7997a68ab33bc504f1321.ctex"
+uid="uid://bb57awss0cdhp"
+path="res://.godot/imported/orc_warlord_koncept.png-42d037226edbf103d91fed6d0e3304bb.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://orcs/ChatGPT Image 5 maj 2026, 00_09_14.png"
-dest_files=["res://.godot/imported/ChatGPT Image 5 maj 2026, 00_09_14.png-30360257a1d7997a68ab33bc504f1321.ctex"]
+source_file="res://orcs/orc_warlord_koncept.png"
+dest_files=["res://.godot/imported/orc_warlord_koncept.png-42d037226edbf103d91fed6d0e3304bb.ctex"]
 
 [params]
 
