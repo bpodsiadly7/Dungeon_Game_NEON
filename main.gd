@@ -4528,6 +4528,7 @@ func _dev_create_panel() -> void:
 	toggle_btn.position = Vector2(get_viewport_rect().size.x - 60, 4)
 	toggle_btn.z_index = 200
 	toggle_btn.pressed.connect(_dev_toggle_panel)
+	toggle_btn.focus_mode = Control.FOCUS_NONE
 	if DMG_FONT: toggle_btn.add_theme_font_override("font", DMG_FONT)
 	$CanvasLayer.add_child(toggle_btn)
 
