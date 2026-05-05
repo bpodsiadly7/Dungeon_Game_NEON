@@ -30,6 +30,7 @@ extends Node2D
 @onready var dice_viewport := $DiceViewport  # NIE $CanvasLayer/DiceViewport
 @onready var dice_roller := $DiceViewport/DiceRoller
 @onready var dice_display := $CanvasLayer/UIRoot/DiceDisplay
+var inventory_screen: Control = null
  
 var home_overlay: ColorRect
 
@@ -571,9 +572,60 @@ func _ready() -> void:
 	#_dev_fill_inventory()
 	set_process_unhandled_input(true)
 	_dev_create_panel()
+	# Stwórz wyższy CanvasLayer dla inventory
+	var inv_layer := CanvasLayer.new()
+	inv_layer.layer = 10
+	add_child(inv_layer)
+	var inv_scene := load("res://inventory_screen.tscn") as PackedScene
+	inventory_screen = inv_scene.instantiate()
+	inv_layer.add_child(inventory_screen)
+	inventory_screen.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Podłącz inventory screen
+	if inventory_screen:
+		inventory_screen.closed.connect(_on_inventory_closed)
+		inventory_screen.item_equipped.connect(_on_inventory_equip)
+		inventory_screen.item_dropped.connect(_on_inventory_drop)
 
 	# ... koniec _ready() 
 	print("[DEBUG] _ready() END")
+
+func open_inventory() -> void:
+	if inventory_screen:
+		var stats := {
+			"str":    player.strength,
+			"agi":    player.agility,
+			"vit":    player.vitality,
+			"crit":   player.crit,
+			"hp":     player.hp,
+			"max_hp": player.max_hp
+		}
+		var eq := {
+			"weapon":   weapon,
+			"armor":    equipped_armor,
+			"helmet":   equipped_helmet,
+			"necklace": equipped_necklace,
+		}
+		inventory_screen.open(inventory, eq, stats)
+
+func _on_inventory_closed() -> void:
+	print("[INVENTORY] Closed")
+
+func _on_inventory_equip(slot_key: String, idx: int) -> void:
+	_equip_item(slot_key, idx)
+	# Zaktualizuj equipped w inventory_screen
+	inventory_screen.equipped = {
+		"weapon":   weapon,
+		"armor":    equipped_armor,
+		"helmet":   equipped_helmet,
+		"necklace": equipped_necklace,
+	}
+	inventory_screen._refresh_equipped()
+	inventory_screen._refresh_backpack()
+
+func _on_inventory_drop(slot_key: String, idx: int) -> void:
+	# TODO: dodaj potwierdzenie drop
+	inventory[slot_key].remove_at(idx)
+	inventory_screen._refresh_backpack()
 
 
 
@@ -758,6 +810,12 @@ func _on_next_enemy_confirmed() -> void:
 	set_turn(Turn.PLAYER)
 
 func _process(_d: float) -> void:
+	if Input.is_action_just_pressed("ui_cancel"):  # ESC
+		if inventory_screen and inventory_screen.visible:
+			inventory_screen._on_close()
+	
+	if Input.is_key_pressed(KEY_I):
+		open_inventory()
 	if Input.is_action_just_pressed("attack"):
 		print("[DEBUG] Attack key pressed! turn=%s player_alive=%s enemy_alive=%s" % [turn, player.is_alive(), enemy.is_alive()])
 		if turn == Turn.PLAYER and player.is_alive() and enemy.is_alive():
@@ -1670,13 +1728,13 @@ func _input(event: InputEvent) -> void:
 		_use_potion()
 
 	# --- INVENTORY CONTROL ---
-	if event.is_action_pressed("toggle_inventory"):
-		if inventory_open:
-			_close_inventory()
-		else:
-			_open_inventory()
-		get_viewport().set_input_as_handled()
-		return
+#	if event.is_action_pressed("toggle_inventory"):
+#		if inventory_screen and inventory_screen.visible:
+#			inventory_screen._on_close()
+#		else:
+#			_open_inventory()
+#		get_viewport().set_input_as_handled()
+#		return
 
 	if inventory_open:
 		if event.is_action_pressed("ui_left"):

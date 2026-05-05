@@ -363,3 +363,6 @@ roller_color = Color(0, 0.39151636, 0, 0)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, 0)
 light_color = Color(0.95281494, 0.9776916, 1, 1)
 light_energy = 0.3
+
+[node name="CanvasLayer2" type="CanvasLayer" parent="."]
+layer = 10

@@ -1,0 +1,156 @@
+[gd_scene load_steps=2 format=3 uid="uid://c02guw2it8qu8"]
+
+[ext_resource type="Script" uid="uid://vvm1f4ccj3d8" path="res://inventory_screen.gd" id="1_3dhud"]
+
+[node name="InventoryScreen" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_3dhud")
+
+[node name="TempBG" type="ColorRect" parent="."]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.3491902, 0.3133042, 0.24780053, 1)
+
+[node name="BG" type="Sprite2D" parent="."]
+visible = false
+centered = false
+region_enabled = true
+
+[node name="MainPanel" type="PanelContainer" parent="."]
+custom_minimum_size = Vector2(900, 600)
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -450.0
+offset_top = -300.0
+offset_right = 450.0
+offset_bottom = 300.0
+grow_horizontal = 2
+grow_vertical = 2
+pivot_offset = Vector2(450, 300)
+
+[node name="MainVBox" type="VBoxContainer" parent="MainPanel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Header" type="HBoxContainer" parent="MainPanel/MainVBox"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="MainPanel/MainVBox/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 32
+text = "INVENTORY"
+horizontal_alignment = 1
+
+[node name="CloseBtn" type="Button" parent="MainPanel/MainVBox/Header"]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+text = "X"
+
+[node name="Content" type="HBoxContainer" parent="MainPanel/MainVBox"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="LeftPanel" type="VBoxContainer" parent="MainPanel/MainVBox/Content"]
+custom_minimum_size = Vector2(320, 0)
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="EquipmentTitle" type="Label" parent="MainPanel/MainVBox/Content/LeftPanel"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "EQUIPMENT"
+horizontal_alignment = 1
+
+[node name="TopRow" type="HBoxContainer" parent="MainPanel/MainVBox/Content/LeftPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="HelmetSlot" type="PanelContainer" parent="MainPanel/MainVBox/Content/LeftPanel/TopRow"]
+custom_minimum_size = Vector2(80, 80)
+layout_mode = 2
+size_flags_horizontal = 10
+
+[node name="NecklaceSlot" type="PanelContainer" parent="MainPanel/MainVBox/Content/LeftPanel/TopRow"]
+custom_minimum_size = Vector2(80, 80)
+layout_mode = 2
+size_flags_horizontal = 2
+
+[node name="WeaponSlot" type="PanelContainer" parent="MainPanel/MainVBox/Content/LeftPanel"]
+custom_minimum_size = Vector2(150, 120)
+layout_mode = 2
+
+[node name="ArmorSlot" type="PanelContainer" parent="MainPanel/MainVBox/Content/LeftPanel"]
+custom_minimum_size = Vector2(150, 120)
+layout_mode = 2
+
+[node name="StatsLabel" type="Label" parent="MainPanel/MainVBox/Content/LeftPanel"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "STR: 10  AGI: 5\\nHP: 100"
+horizontal_alignment = 1
+
+[node name="RightPanel" type="VBoxContainer" parent="MainPanel/MainVBox/Content"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="BackpackTitle" type="Label" parent="MainPanel/MainVBox/Content/RightPanel"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "BACKPACK"
+horizontal_alignment = 1
+
+[node name="BackpackScroll" type="ScrollContainer" parent="MainPanel/MainVBox/Content/RightPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="ItemGrid" type="GridContainer" parent="MainPanel/MainVBox/Content/RightPanel/BackpackScroll"]
+layout_mode = 2
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 8
+columns = 5
+
+[node name="ItemDetails" type="PanelContainer" parent="MainPanel/MainVBox/Content/RightPanel"]
+custom_minimum_size = Vector2(0, 140)
+layout_mode = 2
+
+[node name="DetailsVBox" type="VBoxContainer" parent="MainPanel/MainVBox/Content/RightPanel/ItemDetails"]
+layout_mode = 2
+
+[node name="ItemName" type="Label" parent="MainPanel/MainVBox/Content/RightPanel/ItemDetails/DetailsVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "[Select an item]"
+
+[node name="ItemStats" type="Label" parent="MainPanel/MainVBox/Content/RightPanel/ItemDetails/DetailsVBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+
+[node name="ButtonsRow" type="HBoxContainer" parent="MainPanel/MainVBox/Content/RightPanel/ItemDetails/DetailsVBox"]
+layout_mode = 2
+
+[node name="EquipBtn" type="Button" parent="MainPanel/MainVBox/Content/RightPanel/ItemDetails/DetailsVBox/ButtonsRow"]
+custom_minimum_size = Vector2(120, 40)
+layout_mode = 2
+text = "Equip"
+
+[node name="DropBtn" type="Button" parent="MainPanel/MainVBox/Content/RightPanel/ItemDetails/DetailsVBox/ButtonsRow"]
+custom_minimum_size = Vector2(120, 40)
+layout_mode = 2
+text = "DROP"
