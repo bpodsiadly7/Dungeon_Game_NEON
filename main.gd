@@ -380,7 +380,7 @@ const ORC_ENEMIES: Array[Dictionary] = [
 	{"name":"Blackguard",      "hp":134, "damage":36, "difficulty":4, "xp":78, "tex":"res://orcs/blackguard.png"},
 	{"name":"Warmaster",       "hp":150, "damage":40, "difficulty":5, "xp":88, "tex":"res://orcs/warmaster.png"},
 	{"name":"Orc Warlord",     "hp":260, "damage":42, "difficulty":5, "xp":140,"tex":"res://orcs/orc_warlord.png"},
-]
+] 
 
 # --- Dungeon 5: Dark Elf Depths ---
 const DARK_ELF_ENEMIES: Array[Dictionary] = [
@@ -4586,6 +4586,7 @@ func _dev_create_panel() -> void:
 	toggle_btn.position = Vector2(get_viewport_rect().size.x - 60, 4)
 	toggle_btn.z_index = 200
 	toggle_btn.pressed.connect(_dev_toggle_panel)
+	toggle_btn.focus_mode = Control.FOCUS_NONE
 	if DMG_FONT: toggle_btn.add_theme_font_override("font", DMG_FONT)
 	$CanvasLayer.add_child(toggle_btn)
 
