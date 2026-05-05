@@ -205,6 +205,10 @@ var inventory: Dictionary = {
 var equipped_armor:   Dictionary = {}
 var equipped_helmet:  Dictionary = {}
 var equipped_necklace:Dictionary = {}
+var equipped_gloves:  Dictionary = {}
+var equipped_boots:   Dictionary = {}
+var equipped_ring1:   Dictionary = {}
+var equipped_ring2:   Dictionary = {}
 
 # --- INVENTORY SKIN / ICONS ---
 
@@ -604,6 +608,10 @@ func open_inventory() -> void:
 			"armor":    equipped_armor,
 			"helmet":   equipped_helmet,
 			"necklace": equipped_necklace,
+			"gloves":   equipped_gloves,
+			"boots":    equipped_boots,
+			"ring1":    equipped_ring1,
+			"ring2":    equipped_ring2,
 		}
 		inventory_screen.open(inventory, eq, stats)
 
@@ -612,14 +620,17 @@ func _on_inventory_closed() -> void:
 
 func _on_inventory_equip(slot_key: String, idx: int) -> void:
 	_equip_item(slot_key, idx)
-	# Zaktualizuj equipped w inventory_screen
 	inventory_screen.equipped = {
 		"weapon":   weapon,
 		"armor":    equipped_armor,
 		"helmet":   equipped_helmet,
 		"necklace": equipped_necklace,
+		"gloves":   equipped_gloves,
+		"boots":    equipped_boots,
+		"ring1":    equipped_ring1,
+		"ring2":    equipped_ring2,
 	}
-	inventory_screen._refresh_equipped()
+	inventory_screen._refresh_all_slots()
 	inventory_screen._refresh_backpack()
 
 func _on_inventory_drop(slot_key: String, idx: int) -> void:
@@ -2293,7 +2304,7 @@ func _load_permanent_items_into_inventory() -> void:
  
 	# 1) Permanenty z GameState.meta["permanent_chest"]
 	var chest: Dictionary = GameState.meta.get("permanent_chest", {})
-	for slot in ["weapon", "armor", "helmet", "necklace"]:
+	for slot in ["weapon", "armor", "helmet", "necklace", "gloves", "boots", "ring1", "ring2"]:
 		var arr: Array = chest.get(slot, [])
 		for it in arr:
 			if typeof(it) == TYPE_DICTIONARY:
@@ -2304,7 +2315,7 @@ func _load_permanent_items_into_inventory() -> void:
  
 	# 2) Itemy wzięte z domu (run["loadout"]) — kluczowy fix!
 	var loadout: Dictionary = GameState.run.get("loadout", {})
-	for slot in ["weapon", "armor", "helmet", "necklace"]:
+	for slot in ["weapon", "armor", "helmet", "necklace", "gloves", "boots", "ring1", "ring2"]:
 		var arr: Array = loadout.get(slot, [])
 		for it in arr:
 			if typeof(it) == TYPE_DICTIONARY:
@@ -2609,6 +2620,14 @@ func _equip_item(key:String, idx:int) -> void:
 				player.emit_signal("hp_changed", player.hp, player.max_hp)
 		"necklace":
 			equipped_necklace = it
+		"gloves":
+			equipped_gloves = it
+		"boots":
+			equipped_boots = it
+		"ring1":
+			equipped_ring1 = it
+		"ring2":
+			equipped_ring2 = it
 		_:
 			pass
 
