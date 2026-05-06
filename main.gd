@@ -251,6 +251,7 @@ var inv_hint_label: Label
 var inventory_open: bool = false
 var inv_prev_label: Label
 var inv_next_label: Label
+var _i_key_held: bool = false
 # --- ITEM BONUSY OD RZADKOŚCI ---
 const BONUS_CHANCE_RARE    := 0.6   # Rare: 60% szans na bonus +1
 const BONUS_CHANCE_EPIC    := 1.0   # Epic: zawsze bonus +2..+3
@@ -590,18 +591,21 @@ func _ready() -> void:
 		inventory_screen.item_equipped.connect(_on_inventory_equip)
 		inventory_screen.item_dropped.connect(_on_inventory_drop)
 		inventory_screen.stat_spent.connect(func(key: String):
-			if player.stat_points > 0:
-				player.stat_points -= 1
-				match key:
-					"str":  player.strength += 1
-					"agi":  player.agility  += 1
-					"vit":  player.vitality += 1
-					"crit": player.crit     += 1
-				player.emit_signal("stats_changed", player.strength, player.agility, player.vitality, player.crit, player.stat_points)
-				# Odśwież staty w inventory
-				inventory_screen.player_stats["stat_points"] = player.stat_points
-				inventory_screen.player_stats[key] = player.get(key) if key != "crit" else player.crit
-				inventory_screen._refresh_stats()
+			if player.stat_points <= 0:
+				return
+			match key:
+				"str":  player.add_strength()
+				"agi":  player.add_agility()
+				"vit":  player.add_vitality()
+				"crit": player.add_crit()
+			inventory_screen.player_stats["stat_points"] = player.stat_points
+			inventory_screen.player_stats["str"] = player.strength
+			inventory_screen.player_stats["agi"] = player.agility
+			inventory_screen.player_stats["vit"] = player.vitality
+			inventory_screen.player_stats["crit"] = player.crit
+			inventory_screen.player_stats["hp"] = player.hp
+			inventory_screen.player_stats["max_hp"] = player.max_hp
+			inventory_screen._refresh_stats()
 		)
 
 	# ... koniec _ready() 
@@ -614,6 +618,7 @@ func open_inventory() -> void:
 			"agi":    player.agility,
 			"vit":    player.vitality,
 			"crit":   player.crit,
+			"stat_points": player.stat_points,
 			"hp":     player.hp,
 			"max_hp": player.max_hp
 		}
@@ -644,6 +649,14 @@ func _on_inventory_equip(slot_key: String, idx: int) -> void:
 		"ring1":    equipped_ring1,
 		"ring2":    equipped_ring2,
 	}
+	inventory_screen.player_stats["str"] = player.strength
+	inventory_screen.player_stats["agi"] = player.agility
+	inventory_screen.player_stats["vit"] = player.vitality
+	inventory_screen.player_stats["crit"] = player.crit
+	inventory_screen.player_stats["stat_points"] = player.stat_points
+	inventory_screen.player_stats["hp"] = player.hp
+	inventory_screen.player_stats["max_hp"] = player.max_hp
+	inventory_screen._refresh_stats()
 	inventory_screen._refresh_all_slots()
 	inventory_screen._refresh_backpack()
 
@@ -840,7 +853,14 @@ func _process(_d: float) -> void:
 			inventory_screen._on_close()
 	
 	if Input.is_key_pressed(KEY_I):
-		open_inventory()
+		if not _i_key_held:
+			_i_key_held = true
+			if inventory_screen and inventory_screen.visible:
+				inventory_screen._on_close()
+			else:
+				open_inventory()
+	else:
+		_i_key_held = false
 	if Input.is_action_just_pressed("attack"):
 		print("[DEBUG] Attack key pressed! turn=%s player_alive=%s enemy_alive=%s" % [turn, player.is_alive(), enemy.is_alive()])
 		if turn == Turn.PLAYER and player.is_alive() and enemy.is_alive():
@@ -3248,6 +3268,14 @@ func _get_equipped_item_for_slot(key:String) -> Dictionary:
 			return equipped_helmet
 		"necklace":
 			return equipped_necklace
+		"gloves":
+			return equipped_gloves
+		"boots":
+			return equipped_boots
+		"ring1":
+			return equipped_ring1
+		"ring2":
+			return equipped_ring2
 		_:
 			return {}
 

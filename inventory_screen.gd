@@ -4,6 +4,7 @@ signal closed
 signal item_equipped(slot_key: String, idx: int)
 signal item_dropped(slot_key: String, idx: int)
 signal stat_spent(stat_key: String)
+signal item_hovered(item: Dictionary, slot_key: String, idx: int)
 
 const SLOT_CONFIG := {
 	"helmet":   {"label": "Helmet",   "icon_key": "helmet",   "pos": Vector2(  0, -160)},
@@ -66,10 +67,21 @@ var _sort_mode: SortMode = SortMode.NONE
 var _slot_panels:  Dictionary = {}
 var _item_grid:    GridContainer = null
 var _item_name:    Label = null
-var _item_stats:   Label = null
+var _item_stats:   RichTextLabel = null
 var _equip_btn:    Button = null
 var _drop_btn:     Button = null
 var _stats_labels: Dictionary = {}
+var _stats_plus_buttons: Dictionary = {}
+var _hovered_item: Dictionary = {}
+var _hovered_slot: String = ""
+var _hovered_idx: int = -1
+var _showing_hover_details: bool = false
+var _shift_compare_active: bool = false
+var _dragging: bool = false
+var _drag_item: Dictionary = {}
+var _drag_slot: String = ""
+var _drag_idx: int = -1
+var _drag_preview: PanelContainer = null
 
 func _ready() -> void:
 	if ResourceLoader.exists("res://MedievalSharp-Bold.ttf"):
@@ -79,6 +91,18 @@ func _ready() -> void:
 	_build_ui()
 	_clear_selection()
 	visible = false
+
+func _process(_delta: float) -> void:
+	if not visible:
+		return
+	var shift_now := Input.is_key_pressed(KEY_SHIFT)
+	if shift_now != _shift_compare_active:
+		_shift_compare_active = shift_now
+		if not _hovered_item.is_empty():
+			_show_item_details(_hovered_item, _hovered_slot, true, _hovered_idx)
+	if _dragging and _drag_preview:
+		_drag_preview.size = Vector2(90, 30)
+		_drag_preview.global_position = get_global_mouse_position() + Vector2(12, 12)
 
 func _build_ui() -> void:
 	var overlay := ColorRect.new()
@@ -158,7 +182,21 @@ func _build_left_panel(parent: HBoxContainer) -> void:
 		lbl_val.custom_minimum_size = Vector2(40, 0)
 		lbl_val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		row.add_child(lbl_val)
+		var plus_btn := Button.new()
+		plus_btn.text = "+"
+		plus_btn.custom_minimum_size = Vector2(22, 22)
+		plus_btn.focus_mode = Control.FOCUS_NONE
+		plus_btn.add_theme_font_size_override("font_size", 14)
+		if _font: plus_btn.add_theme_font_override("font", _font)
+		var captured_key := str(def[0])
+		plus_btn.pressed.connect(func():
+			if int(player_stats.get("stat_points", 0)) > 0:
+				stat_spent.emit(captured_key)
+		)
+		_style_small_btn(plus_btn, def[2] as Color)
+		row.add_child(plus_btn)
 		_stats_labels[str(def[0])] = lbl_val
+		_stats_plus_buttons[str(def[0])] = plus_btn
 		vbox.add_child(_make_hsep())
 
 	# Stat points
@@ -171,23 +209,6 @@ func _build_left_panel(parent: HBoxContainer) -> void:
 	var sp_val := _make_label("0", 15, Color(1.0, 0.92, 0.30))
 	sp_row.add_child(sp_val)
 	_stats_labels["stat_points"] = sp_val
-
-	# Przyciski +
-	for def in stat_defs:
-		var key: String = str(def[0])
-		var btn := Button.new()
-		btn.text = "+ %s" % str(def[1])
-		btn.custom_minimum_size = Vector2(0, 30)
-		btn.focus_mode = Control.FOCUS_NONE
-		btn.add_theme_font_size_override("font_size", 13)
-		if _font: btn.add_theme_font_override("font", _font)
-		var captured_key := key
-		btn.pressed.connect(func():
-			if int(player_stats.get("stat_points", 0)) > 0:
-				stat_spent.emit(captured_key)
-		)
-		_style_small_btn(btn, def[2] as Color)
-		vbox.add_child(btn)
 
 	vbox.add_child(_make_hsep())
 	var hp_row := HBoxContainer.new()
@@ -309,8 +330,15 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 
 	_item_name = _make_label("[Select an item]", 17, Color(0.90, 0.88, 0.85))
 	det_vbox.add_child(_item_name)
-	_item_stats = _make_label("", 13, Color(0.78, 0.75, 0.70))
+	_item_stats = RichTextLabel.new()
+	_item_stats.bbcode_enabled = true
+	_item_stats.fit_content = true
+	_item_stats.scroll_active = false
 	_item_stats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_item_stats.add_theme_font_size_override("normal_font_size", 13)
+	_item_stats.add_theme_color_override("default_color", Color(0.78, 0.75, 0.70))
+	if _font:
+		_item_stats.add_theme_font_override("normal_font", _font)
 	det_vbox.add_child(_item_stats)
 
 	var btn_row := HBoxContainer.new()
@@ -361,6 +389,10 @@ func _refresh_stats() -> void:
 			lbl.text = "%d / %d" % [int(player_stats.get("hp", 0)), int(player_stats.get("max_hp", 0))]
 		else:
 			lbl.text = str(int(player_stats.get(key, 0)))
+	var has_points := int(player_stats.get("stat_points", 0)) > 0
+	for key in _stats_plus_buttons:
+		var btn: Button = _stats_plus_buttons[key]
+		btn.disabled = not has_points
 
 func _refresh_all_slots() -> void:
 	for slot_key in _slot_panels:
@@ -405,6 +437,28 @@ func _refresh_slot(slot_key: String) -> void:
 			var perm := _make_label("*", 11, Color(0.55, 0.90, 0.45))
 			perm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			vbox.add_child(perm)
+		var hover_btn := Button.new()
+		hover_btn.flat = true
+		hover_btn.focus_mode = Control.FOCUS_NONE
+		hover_btn.mouse_filter = Control.MOUSE_FILTER_STOP
+		hover_btn.set_anchors_preset(Control.PRESET_FULL_RECT)
+		hover_btn.mouse_entered.connect(func():
+			_hovered_item = item.duplicate(true)
+			_hovered_slot = slot_key
+			_hovered_idx = -1
+			_show_item_details(item, slot_key, true, -1)
+		)
+		hover_btn.mouse_exited.connect(func():
+			if _hovered_slot == slot_key:
+				_hovered_item = {}
+				_hovered_slot = ""
+				_hovered_idx = -1
+				if selected_idx >= 0:
+					_show_item_details(selected_item, selected_slot, false, selected_idx)
+				else:
+					_clear_selection()
+		)
+		panel.add_child(hover_btn)
 
 func _refresh_backpack() -> void:
 	for c in _item_grid.get_children():
@@ -440,6 +494,7 @@ func _refresh_backpack() -> void:
 		var tile := PanelContainer.new()
 		tile.custom_minimum_size = Vector2(68, 68)
 		_set_panel_border(tile, col)
+		tile.mouse_filter = Control.MOUSE_FILTER_STOP
 
 		var vbox := VBoxContainer.new()
 		vbox.add_theme_constant_override("separation", 2)
@@ -469,8 +524,35 @@ func _refresh_backpack() -> void:
 		var captured_item: Dictionary = item.duplicate(true)
 		var captured_slot: String     = slot_key
 		var captured_idx: int         = idx
+		tile.mouse_entered.connect(func():
+			_hovered_item = captured_item
+			_hovered_slot = captured_slot
+			_hovered_idx = captured_idx
+			_show_item_details(captured_item, captured_slot, true, captured_idx)
+		)
+		tile.mouse_exited.connect(func():
+			if _hovered_idx == captured_idx and _hovered_slot == captured_slot:
+				_hovered_item = {}
+				_hovered_slot = ""
+				_hovered_idx = -1
+				if _showing_hover_details:
+					if selected_idx >= 0:
+						_show_item_details(selected_item, selected_slot, false, selected_idx)
+					else:
+						_clear_selection()
+		)
+		tile.gui_input.connect(func(event: InputEvent):
+			if event is InputEventMouseButton:
+				var mb := event as InputEventMouseButton
+				if mb.button_index == MOUSE_BUTTON_LEFT:
+					if mb.pressed:
+						_start_drag_item(captured_item, captured_slot, captured_idx, col)
+					else:
+						_finish_drag_item()
+		)
 		var btn := Button.new()
 		btn.flat = true
+		btn.mouse_filter = Control.MOUSE_FILTER_PASS
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.set_anchors_preset(Control.PRESET_FULL_RECT)
 		btn.pressed.connect(func(): _select_item(captured_item, captured_slot, captured_idx, tile))
@@ -487,12 +569,59 @@ func _select_item(item: Dictionary, slot_key: String, idx: int, tile: PanelConta
 	_selected_tile = tile
 	_set_panel_border(tile, Color(1, 1, 1))
 
+	_show_item_details(item, slot_key, false, idx)
+	_equip_btn.visible = true
+	_drop_btn.visible  = not bool(item.get("permanent", false))
+
+func _clear_selection() -> void:
+	selected_item  = {}
+	selected_slot  = ""
+	selected_idx   = -1
+	_selected_tile = null
+	if _item_name:  _item_name.text  = "[Select an item]"
+	if _item_stats: _item_stats.text = ""
+	if _equip_btn:  _equip_btn.visible = false
+	if _drop_btn:   _drop_btn.visible  = false
+	_showing_hover_details = false
+
+func _input(event: InputEvent) -> void:
+	if not visible:
+		return
+	if not _dragging:
+		return
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
+			_finish_drag_item()
+
+func _on_equip() -> void:
+	if selected_idx >= 0:
+		item_equipped.emit(selected_slot, selected_idx)
+		_clear_selection()
+		_refresh_backpack()
+
+func _on_drop() -> void:
+	if selected_idx >= 0 and not bool(selected_item.get("permanent", false)):
+		item_dropped.emit(selected_slot, selected_idx)
+		_clear_selection()
+		_refresh_backpack()
+
+func _show_item_details(item: Dictionary, slot_key: String, from_hover: bool, idx: int = -1) -> void:
 	var r: int = clamp(int(item.get("rarity", 0)), 0, 3)
 	_item_name.text = "%s  [%s]" % [str(item.get("name", "?")), RARITY_NAMES[r]]
 	_item_name.add_theme_color_override("font_color", RARITY_COLORS[r])
+	var lines := _build_item_description(item, slot_key)
+	if Input.is_key_pressed(KEY_SHIFT):
+		var eq_item: Dictionary = equipped.get(slot_key, {})
+		if not eq_item.is_empty():
+			lines += "\n\nCOMPARE\n%s" % _build_compare_block(item, eq_item, slot_key)
+		else:
+			lines += "\n\nCOMPARE\nNo equipped item in this slot."
+	_item_stats.text = lines
+	_showing_hover_details = from_hover and idx != selected_idx
 
+func _build_item_description(item: Dictionary, slot_key: String) -> String:
 	var lines := "Slot: %s" % slot_key.capitalize()
-
 	match slot_key:
 		"weapon":
 			lines += "\nDMG base: %d" % int(item.get("base", 0))
@@ -510,41 +639,106 @@ func _select_item(item: Dictionary, slot_key: String, idx: int, tile: PanelConta
 			lines += "\nBonus: %s" % str(item.get("bonus_stat", "—")).to_upper()
 		"gloves", "boots", "ring1", "ring2":
 			lines += "\nBase: %d" % int(item.get("base", 0))
-
-	# Bonus stat (wszystkie typy)
 	var bonus_stat: String = str(item.get("bonus_stat", ""))
 	var bonus_value: int   = int(item.get("bonus_value", 0))
 	if bonus_stat != "" and slot_key != "necklace":
 		lines += "\nBonus: +%d %s" % [bonus_value, bonus_stat.to_upper()]
-
 	if bool(item.get("permanent", false)):
 		lines += "\n★ PERMANENT"
+	return lines
 
-	_item_stats.text = lines
-	_equip_btn.visible = true
-	_drop_btn.visible  = not bool(item.get("permanent", false))
+func _build_compare_block(candidate: Dictionary, equipped_item: Dictionary, slot_key: String) -> String:
+	var cmp_lines := "Current: %s" % str(equipped_item.get("name", "—"))
+	match slot_key:
+		"weapon", "gloves", "boots", "ring1", "ring2":
+			var cand_base := int(candidate.get("base", 0))
+			var eq_base := int(equipped_item.get("base", 0))
+			var delta_base := cand_base - eq_base
+			cmp_lines += "\nBase: %d (%s)" % [cand_base, _fmt_delta(delta_base, false)]
+		"armor":
+			var cand_dr := float(candidate.get("dr", 0))
+			var eq_dr := float(equipped_item.get("dr", 0))
+			var delta_dr := (cand_dr - eq_dr) * 100.0
+			cmp_lines += "\nDR: %.0f%% (%s)" % [cand_dr * 100.0, _fmt_delta(delta_dr, true)]
+		"helmet":
+			var cand_hp := int(candidate.get("hp_bonus", 0))
+			var eq_hp := int(equipped_item.get("hp_bonus", 0))
+			var delta_hp := cand_hp - eq_hp
+			cmp_lines += "\nHP Bonus: %d (%s)" % [cand_hp, _fmt_delta(delta_hp, false)]
+		"necklace":
+			cmp_lines += "\nBonus stat: %s -> %s" % [
+				str(equipped_item.get("bonus_stat", "—")).to_upper(),
+				str(candidate.get("bonus_stat", "—")).to_upper()
+			]
+	var cand_bonus_value := int(candidate.get("bonus_value", 0))
+	var eq_bonus_value := int(equipped_item.get("bonus_value", 0))
+	if str(candidate.get("bonus_stat", "")) != "":
+		var delta_bonus := cand_bonus_value - eq_bonus_value
+		cmp_lines += "\nBonus value: %d (%s)" % [cand_bonus_value, _fmt_delta(delta_bonus, false)]
+	return cmp_lines
 
-func _clear_selection() -> void:
-	selected_item  = {}
-	selected_slot  = ""
-	selected_idx   = -1
-	_selected_tile = null
-	if _item_name:  _item_name.text  = "[Select an item]"
-	if _item_stats: _item_stats.text = ""
-	if _equip_btn:  _equip_btn.visible = false
-	if _drop_btn:   _drop_btn.visible  = false
+func _fmt_delta(delta: float, with_percent: bool) -> String:
+	var text := "%+d" % int(delta)
+	if with_percent:
+		text = "%+.0f%%" % delta
+	var col := "#9AA0A6"
+	if delta > 0.0:
+		col = "#54D17A"
+	elif delta < 0.0:
+		col = "#E06C75"
+	return "[color=%s]%s[/color]" % [col, text]
 
-func _on_equip() -> void:
-	if selected_idx >= 0:
-		item_equipped.emit(selected_slot, selected_idx)
+func _start_drag_item(item: Dictionary, slot_key: String, idx: int, border_col: Color) -> void:
+	_dragging = true
+	_drag_item = item.duplicate(true)
+	_drag_slot = slot_key
+	_drag_idx = idx
+	if _drag_preview and is_instance_valid(_drag_preview):
+		_drag_preview.queue_free()
+	_drag_preview = PanelContainer.new()
+	_drag_preview.custom_minimum_size = Vector2(90, 30)
+	_drag_preview.size = Vector2(90, 30)
+	_drag_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_drag_preview.z_index = 999
+	_set_panel_border(_drag_preview, border_col)
+	var preview_name := str(item.get("name", "?"))
+	if preview_name.length() > 11:
+		preview_name = preview_name.substr(0, 11) + "..."
+	var preview_lbl := _make_label(preview_name, 10, border_col)
+	preview_lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	preview_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	preview_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	preview_lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_drag_preview.add_child(preview_lbl)
+	add_child(_drag_preview)
+	_drag_preview.global_position = get_global_mouse_position() + Vector2(12, 12)
+
+func _finish_drag_item() -> void:
+	if not _dragging:
+		return
+	var target_slot := _slot_key_from_global_pos(get_global_mouse_position())
+	if target_slot != "" and target_slot == _drag_slot:
+		item_equipped.emit(_drag_slot, _drag_idx)
 		_clear_selection()
+		_refresh_all_slots()
 		_refresh_backpack()
+	if _drag_preview and is_instance_valid(_drag_preview):
+		_drag_preview.queue_free()
+	_drag_preview = null
+	_dragging = false
+	_drag_item = {}
+	_drag_slot = ""
+	_drag_idx = -1
 
-func _on_drop() -> void:
-	if selected_idx >= 0 and not bool(selected_item.get("permanent", false)):
-		item_dropped.emit(selected_slot, selected_idx)
-		_clear_selection()
-		_refresh_backpack()
+func _slot_key_from_global_pos(global_pos: Vector2) -> String:
+	for slot_key in _slot_panels:
+		var panel: PanelContainer = _slot_panels[slot_key]
+		if not panel:
+			continue
+		var rect := panel.get_global_rect()
+		if rect.has_point(global_pos):
+			return slot_key
+	return ""
 
 func _load_char_sprite(tex_rect: TextureRect) -> void:
 	var cls: String = String(GameState.meta.get("chosen_class", ""))
