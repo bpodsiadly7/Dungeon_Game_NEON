@@ -589,6 +589,20 @@ func _ready() -> void:
 		inventory_screen.closed.connect(_on_inventory_closed)
 		inventory_screen.item_equipped.connect(_on_inventory_equip)
 		inventory_screen.item_dropped.connect(_on_inventory_drop)
+		inventory_screen.stat_spent.connect(func(key: String):
+			if player.stat_points > 0:
+				player.stat_points -= 1
+				match key:
+					"str":  player.strength += 1
+					"agi":  player.agility  += 1
+					"vit":  player.vitality += 1
+					"crit": player.crit     += 1
+				player.emit_signal("stats_changed", player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+				# Odśwież staty w inventory
+				inventory_screen.player_stats["stat_points"] = player.stat_points
+				inventory_screen.player_stats[key] = player.get(key) if key != "crit" else player.crit
+				inventory_screen._refresh_stats()
+		)
 
 	# ... koniec _ready() 
 	print("[DEBUG] _ready() END")
@@ -2605,7 +2619,9 @@ func _equip_item(key:String, idx:int) -> void:
 				"base": int(it.get("base", 10)),
 				"scale": it.get("scale", {"str":1.0,"agi":0.0}),
 				"bonus_stat": it.get("bonus_stat", ""),
-				"bonus_value": int(it.get("bonus_value", 0))
+				"bonus_value": int(it.get("bonus_value", 0)),
+				"rarity": it.get("rarity", 0)
+				
 			}
 		"armor":
 			equipped_armor = it

@@ -3,6 +3,7 @@ extends Control
 signal closed
 signal item_equipped(slot_key: String, idx: int)
 signal item_dropped(slot_key: String, idx: int)
+signal stat_spent(stat_key: String)
 
 const SLOT_CONFIG := {
 	"helmet":   {"label": "Helmet",   "icon_key": "helmet",   "pos": Vector2(  0, -160)},
@@ -158,6 +159,35 @@ func _build_left_panel(parent: HBoxContainer) -> void:
 		lbl_val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		row.add_child(lbl_val)
 		_stats_labels[str(def[0])] = lbl_val
+		vbox.add_child(_make_hsep())
+
+	# Stat points
+	var sp_row := HBoxContainer.new()
+	sp_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(sp_row)
+	var sp_lbl := _make_label("Stat Points:", 15, Color(0.72, 0.70, 0.66))
+	sp_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sp_row.add_child(sp_lbl)
+	var sp_val := _make_label("0", 15, Color(1.0, 0.92, 0.30))
+	sp_row.add_child(sp_val)
+	_stats_labels["stat_points"] = sp_val
+
+	# Przyciski +
+	for def in stat_defs:
+		var key: String = str(def[0])
+		var btn := Button.new()
+		btn.text = "+ %s" % str(def[1])
+		btn.custom_minimum_size = Vector2(0, 30)
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.add_theme_font_size_override("font_size", 13)
+		if _font: btn.add_theme_font_override("font", _font)
+		var captured_key := key
+		btn.pressed.connect(func():
+			if int(player_stats.get("stat_points", 0)) > 0:
+				stat_spent.emit(captured_key)
+		)
+		_style_small_btn(btn, def[2] as Color)
+		vbox.add_child(btn)
 
 	vbox.add_child(_make_hsep())
 	var hp_row := HBoxContainer.new()
@@ -461,21 +491,36 @@ func _select_item(item: Dictionary, slot_key: String, idx: int, tile: PanelConta
 	_item_name.text = "%s  [%s]" % [str(item.get("name", "?")), RARITY_NAMES[r]]
 	_item_name.add_theme_color_override("font_color", RARITY_COLORS[r])
 
-	var base: int              = int(item.get("base", 0))
-	var scale_dict: Dictionary = item.get("scale", {})
-	var lines := "Slot: %s   Base: %d" % [slot_key.capitalize(), base]
-	if not scale_dict.is_empty():
-		var s := ""
-		for k in scale_dict:
-			s += "  %s x%.1f" % [k.to_upper(), float(scale_dict[k])]
-		lines += "\nScaling:%s" % s
-	var bonus_stat: String = str(item.get("bonus_stat", ""))
-	if bonus_stat != "":
-		lines += "\nBonus: +%s" % bonus_stat.to_upper()
-	if bool(item.get("permanent", false)):
-		lines += "\n* PERMANENT"
-	_item_stats.text = lines
+	var lines := "Slot: %s" % slot_key.capitalize()
 
+	match slot_key:
+		"weapon":
+			lines += "\nDMG base: %d" % int(item.get("base", 0))
+			var scale_dict: Dictionary = item.get("scale", {})
+			if not scale_dict.is_empty():
+				var s := ""
+				for k in scale_dict:
+					s += "  %s×%.1f" % [k.to_upper(), float(scale_dict[k])]
+				lines += "\nScaling:%s" % s
+		"armor":
+			lines += "\nDamage Reduction: %.0f%%" % (float(item.get("dr", 0)) * 100)
+		"helmet":
+			lines += "\nHP Bonus: +%d" % int(item.get("hp_bonus", 0))
+		"necklace":
+			lines += "\nBonus: %s" % str(item.get("bonus_stat", "—")).to_upper()
+		"gloves", "boots", "ring1", "ring2":
+			lines += "\nBase: %d" % int(item.get("base", 0))
+
+	# Bonus stat (wszystkie typy)
+	var bonus_stat: String = str(item.get("bonus_stat", ""))
+	var bonus_value: int   = int(item.get("bonus_value", 0))
+	if bonus_stat != "" and slot_key != "necklace":
+		lines += "\nBonus: +%d %s" % [bonus_value, bonus_stat.to_upper()]
+
+	if bool(item.get("permanent", false)):
+		lines += "\n★ PERMANENT"
+
+	_item_stats.text = lines
 	_equip_btn.visible = true
 	_drop_btn.visible  = not bool(item.get("permanent", false))
 
