@@ -15,6 +15,9 @@ extends Node2D
 var unspent_points_label: Label = null
 var _unspent_pulse_tween: Tween = null
 
+# --- Kill context for boss-upgrades ---
+var _last_kill_context: Dictionary = {}
+
 # --- Stats panel refs ---
 @onready var btn_stats: Button = $CanvasLayer/UIRoot/Left/StatsButton
 @onready var stats_panel: PanelContainer = $CanvasLayer/UIRoot/StatsPanel
@@ -83,6 +86,10 @@ const SKILL_COOLDOWN_TURNS := 10
 var skills: Dictionary = {}
 # slot->pozostałe tury cooldownu
 var skill_cooldowns: Dictionary = {}
+
+const RING_SKILLS := {
+	"ring_skill_placeholder": {"key":"quick_slash", "name":"Quick Slash", "type":"active", "desc":"Two fast hits."},
+}
 
 # Flagi/parametry pod przyszłe klasy (pasywki)
 var shield_active: bool = false                 # Guardian active: blok 100% next hit
@@ -170,11 +177,12 @@ const DROP_CHANCE_BY_DIFF := {
 
 # Wagi rzadkości w zależności od trudności (im trudniej, tym większa szansa na lepsze)
 const RARITY_WEIGHTS_BY_DIFF := {
-	1: {Rarity.COMMON: 79.95, Rarity.RARE: 18, Rarity.EPIC: 2,  Rarity.LEGENDARY: 0.05},
-	2: {Rarity.COMMON: 65, Rarity.RARE: 28, Rarity.EPIC: 6,  Rarity.LEGENDARY: 1},
-	3: {Rarity.COMMON: 50, Rarity.RARE: 35, Rarity.EPIC: 12, Rarity.LEGENDARY: 3},
-	4: {Rarity.COMMON: 38, Rarity.RARE: 38, Rarity.EPIC: 18, Rarity.LEGENDARY: 6},
-	5: {Rarity.COMMON: 25, Rarity.RARE: 35, Rarity.EPIC: 25, Rarity.LEGENDARY: 15}
+	# Legend/Unique are excluded from normal rolls (Legend=0% drop, Unique=boss-defined)
+	1: {Rarity.COMMON: 80, Rarity.RARE: 18, Rarity.EPIC: 2},
+	2: {Rarity.COMMON: 65, Rarity.RARE: 28, Rarity.EPIC: 7},
+	3: {Rarity.COMMON: 50, Rarity.RARE: 35, Rarity.EPIC: 15},
+	4: {Rarity.COMMON: 38, Rarity.RARE: 38, Rarity.EPIC: 24},
+	5: {Rarity.COMMON: 25, Rarity.RARE: 35, Rarity.EPIC: 40}
 }
 
 # --- PERMANENT badge (kolory) ---
@@ -187,12 +195,13 @@ const PERMA_COL_TEXT    := Color(0.92, 1.00, 0.92, 1.0)
 enum InvSlot { WEAPON, ARMOR, HELMET, NECKLACE }
 const INV_TABS := ["Weapon", "Armor", "Helmet", "Necklace"]
 
-enum Rarity { COMMON, RARE, EPIC, LEGENDARY }
+enum Rarity { COMMON, RARE, EPIC, LEGEND, UNIQUE }
 const RARITY_COLORS := {
 	Rarity.COMMON: Color(1,1,1),
 	Rarity.RARE: Color(0.45,0.75,1.0),
 	Rarity.EPIC: Color(0.75,0.55,0.95),
-	Rarity.LEGENDARY: Color(1.0,0.85,0.2)
+	Rarity.LEGEND: Color(1.0,0.85,0.2),
+	Rarity.UNIQUE: Color(0.30, 1.00, 0.85)
 }
 
 # Spójne klucze: "weapon", "armor", "helmet", "necklace"
@@ -200,7 +209,11 @@ var inventory: Dictionary = {
 	"weapon":  [],   # Array[Dictionary]
 	"armor":   [],   # Array[Dictionary]
 	"helmet":  [],   # Array[Dictionary]
-	"necklace":[]    # Array[Dictionary]
+	"necklace":[],   # Array[Dictionary]
+	"gloves":  [],   # Array[Dictionary]
+	"boots":   [],   # Array[Dictionary]
+	"ring1":   [],   # Array[Dictionary]
+	"ring2":   [],   # Array[Dictionary]
 }
 
 # Założone przedmioty
@@ -232,8 +245,28 @@ const ICON_BY_TYPE := {
 	"bow":       "res://ikony/bow_icon.png",
 	"crossbow":  "res://ikony/crossbow_icon.png",
 	"armor":     "res://ikony/armor_icon.png",
+	"armor_light":     "res://ikony/armor_light_icon.png",
+	"armor_medium":    "res://ikony/armor_medium_icon.png",
+	"armor_heavy":     "res://ikony/armor_heavy_icon.png",
+	"armor_berserker": "res://ikony/armor_berserker_icon.png",
 	"helmet":    "res://ikony/helmet_icon.png",
+	"helmet_light":     "res://ikony/helmet_light_icon.png",
+	"helmet_medium":    "res://ikony/helmet_medium_icon.png",
+	"helmet_heavy":     "res://ikony/helmet_heavy_icon.png",
+	"helmet_berserker": "res://ikony/helmet_berserker_icon.png",
 	"necklace":  "res://ikony/necklace_icon.png",
+	"gloves":    "res://ikony/gloves_icon.png",
+	"gloves_light":     "res://ikony/gloves_light_icon.png",
+	"gloves_medium":    "res://ikony/gloves_medium_icon.png",
+	"gloves_heavy":     "res://ikony/gloves_heavy_icon.png",
+	"gloves_berserker": "res://ikony/gloves_berserker_icon.png",
+	"boots":     "res://ikony/boots_icon.png",
+	"boots_light":     "res://ikony/boots_light_icon.png",
+	"boots_medium":    "res://ikony/boots_medium_icon.png",
+	"boots_heavy":     "res://ikony/boots_heavy_icon.png",
+	"boots_berserker": "res://ikony/boots_berserker_icon.png",
+	"ring1": "res://ikony/ring_icon.png",
+	"ring2": "res://ikony/ring_icon.png",
 	"potion":    "res://ikony/potion_icon.png"
 }
 
@@ -257,8 +290,23 @@ var _i_key_held: bool = false
 # --- ITEM BONUSY OD RZADKOŚCI ---
 const BONUS_CHANCE_RARE    := 0.6   # Rare: 60% szans na bonus +1
 const BONUS_CHANCE_EPIC    := 1.0   # Epic: zawsze bonus +2..+3
-const BONUS_CHANCE_LEG     := 1.0   # Legendary: zawsze bonus +3..+8
+const BONUS_CHANCE_LEG     := 1.0   # Legend: zawsze bonus +3..+8
 const BONUS_STATS := ["str","agi","vit","crit"]  # które staty mogą wypaść
+
+# Unique: boss-defined items (not rolled randomly)
+# Keying by enemy name for now; can be switched to boss_id later.
+const UNIQUE_ITEMS_BY_BOSS := {
+	# Example:
+	# "Lich King": {
+	# 	"type":"weapon",
+	# 	"name":"Soulrender (Unique)",
+	# 	"rarity": Rarity.UNIQUE,
+	# 	"base": 12,
+	# 	"scale": {"str": 0.6, "agi": 0.6},
+	# 	"bonuses": {"crit": 2},
+	# 	"unique_effect": "On Crit: gain 1 potion charge.",
+	# }
+}
 
 
 # --- UI THEME / COLORS ---
@@ -317,6 +365,11 @@ const TREASURE_TEX := "res://treasures/mystery_chest.png"  # opcjonalna grafika 
 const SHRINE_CHANCE: float = 0.10  # TESTOWO (łatwo wywołać). Po teście zmień np. na 0.10.
 var shrine_dialog: AcceptDialog
 var shrine_list_box: VBoxContainer
+var shrine_preview: RichTextLabel
+var _shrine_pending_key: String = ""
+var _shrine_pending_idx: int = -1
+var _shrine_confirm_overlay: ColorRect = null
+var _shrine_confirm_panel: PanelContainer = null
 var _shrine_dialog_open: bool = false
 var _shrine_locked: bool = false
 var _shrine_in_progress: bool = false 
@@ -534,7 +587,7 @@ func _ready() -> void:
 
 	# Pierwszy przeciwnik
 
-# Załaduj dungeon wybrany w home_scene
+	# Załaduj dungeon wybrany w home_scene
 	var start_idx: int = int(GameState.run.get("dungeon_index", 0))
 	if DUNGEONS.has(start_idx):
 		current_dungeon_index = start_idx
@@ -551,9 +604,10 @@ func _ready() -> void:
 		visited_dungeons.append(int(v))
 	if not visited_dungeons.has(current_dungeon_index):
 		visited_dungeons.append(current_dungeon_index)
-		
+
 	_spawn_enemy(_pick_enemy())
-		# --- Label aktualnego dungeonu ---
+
+	# --- Label aktualnego dungeonu ---
 	lbl_dungeon_name = Label.new()
 	lbl_dungeon_name.text = "Current dungeon: %s" % String(DUNGEONS[current_dungeon_index]["name"])
 	lbl_dungeon_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -833,12 +887,16 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 		return
 
 
-	current_enemy_data = data
+	current_enemy_data = data.duplicate(true)
+	# Ensure armor exists (new armor system). Fallback from difficulty.
+	if not current_enemy_data.has("armor"):
+		var diff = clamp(int(current_enemy_data.get("difficulty", 1)), 1, 5)
+		current_enemy_data["armor"] = clamp(diff + 2, 0, 15)
 	enemy.setup_enemy(
-		data["name"],
-		data["hp"],
-		data["damage"],
-		data.get("tex", "")
+		current_enemy_data["name"],
+		current_enemy_data["hp"],
+		current_enemy_data["damage"],
+		current_enemy_data.get("tex", "")
 	)
 	_update_labels()
 	
@@ -924,41 +982,60 @@ func _on_attack_pressed() -> void:
 # --- Tura gracza ---
 func _player_attack_round_with_roll(roll:int) -> String:
 	var text := ""
+	# Must be set BEFORE enemy.take_damage(), because `defeated` signal fires inside it.
+	_last_kill_context = {"roll": roll, "weapon_before": weapon.duplicate(true)}
+	var enemy_armor: int = clamp(int(current_enemy_data.get("armor", 0)), 0, 15)
 	
-	# 10 = graze (połowa normalnych obrażeń, bez kryta)
-	if roll == 10:
-		var base_dmg:int = calc_player_weapon_damage()
-		var graze:int = max(1, int(round(base_dmg * 0.5)))
-		enemy.take_damage(graze)
-		show_damage_popup(enemy, str(graze), "hit")
-		text += "You roll %d → GRAZE for %d dmg.\n" % [roll, graze]
-		if not enemy.is_alive():
-			text += "Enemy defeated!"
-		return text
-	
-	if roll >= HIT_DC:
-		var dmg:int = calc_player_weapon_damage()
-		var crit := (roll == CRIT)
-		if crit:
-			dmg = int(round(dmg * calc_crit_multiplier()))
-		enemy.take_damage(dmg)
-		show_damage_popup(enemy, str(dmg), "crit" if crit else "hit")
-		text += "You roll %d → HIT%s for %d dmg.\n" % [roll, " (CRIT!)" if crit else "", dmg]
-
-		# Barbarian lifesteal na CRIT
-		if crit and bloodlust_lifesteal > 0.0 and player.is_alive():
-			var heal = max(1, int(round(dmg * bloodlust_lifesteal)))
-			player.hp = min(player.max_hp, player.hp + heal)
-			player.emit_signal("hp_changed", player.hp, player.max_hp)
-			show_damage_popup(player, "+" + str(heal), "heal")
-
-		if not enemy.is_alive():
-			text += "Enemy defeated!"
-			return text
-	else:
+	# Armor-based hit rules:
+	# roll < armor -> miss
+	# roll == armor -> half
+	# roll > armor and < 20 -> scaled hit
+	# roll == 20 -> crit
+	if roll < enemy_armor:
 		show_damage_popup(enemy, "dodge", "miss")
-		text += "You roll %d → MISS.\n" % roll
+		text += "You roll %d vs Armor %d → MISS.\n" % [roll, enemy_armor]
+		return text
+
+	var base_dmg: int = calc_player_weapon_damage()
+	var kind := "hit"
+	var mult := 1.0
+	var crit := (roll == CRIT)
+	if crit:
+		kind = "crit"
+		mult = calc_crit_multiplier()
+	elif roll == enemy_armor:
+		mult = 0.5
+	else:
+		mult = damage_multiplier_from_roll(roll, enemy_armor)
+
+	var dmg: int = max(1, int(round(float(base_dmg) * mult)))
+	enemy.take_damage(dmg)
+	show_damage_popup(enemy, str(dmg), kind)
+	text += "You roll %d vs Armor %d → %s for %d dmg.\n" % [
+		roll, enemy_armor, "CRIT" if crit else ("HALF" if roll == enemy_armor else "HIT"), dmg
+	]
+
+	# Barbarian lifesteal na CRIT
+	if crit and bloodlust_lifesteal > 0.0 and player.is_alive():
+		var heal = max(1, int(round(dmg * bloodlust_lifesteal)))
+		player.hp = min(player.max_hp, player.hp + heal)
+		player.emit_signal("hp_changed", player.hp, player.max_hp)
+		show_damage_popup(player, "+" + str(heal), "heal")
+
+	if not enemy.is_alive():
+		text += "Enemy defeated!"
 	return text
+
+func damage_multiplier_from_roll(roll: int, armor: int) -> float:
+	# roll is in (armor, 20)
+	var min_roll = clamp(armor + 1, 1, 19)
+	var max_roll := 19
+	if roll <= min_roll:
+		return 1.0
+	if roll >= max_roll:
+		return 1.8
+	var t := float(roll - min_roll) / float(max(1, max_roll - min_roll))
+	return lerpf(1.0, 1.8, t)
 
 
 
@@ -972,6 +1049,7 @@ func _enemy_attack_round() -> String:
 		return "The chest does nothing..."
 
 	var roll: int = randi_range(1, 20)
+	var player_armor: int = _calc_player_armor_total()
 
 	# CRIT przeciwnika
 	if roll == CRIT:
@@ -981,21 +1059,29 @@ func _enemy_attack_round() -> String:
 			return "Enemy rolls %d → would CRIT, but you DODGE!" % roll
 		var dmg_crit: int = int(round(enemy.damage * CRIT_MULT))
 		_apply_player_damage(dmg_crit, "crit")
-		return "Enemy rolls %d → CRIT for %d dmg." % [roll, dmg_crit]
+		return "Enemy rolls %d vs Armor %d → CRIT for %d dmg." % [roll, player_armor, dmg_crit]
 
-	# Zwykły HIT przeciwnika
-	elif roll >= HIT_DC:
+	# MISS
+	if roll < player_armor:
+		show_damage_popup(player, "dodge", "miss")
+		return "Enemy rolls %d vs Armor %d → MISS." % [roll, player_armor]
+
+	# HALF
+	if roll == player_armor:
+		var dmg_half: int = max(1, int(round(float(enemy.damage) * 0.5)))
+		_apply_player_damage(dmg_half, "hit")
+		return "Enemy rolls %d vs Armor %d → HALF for %d dmg." % [roll, player_armor, dmg_half]
+
+	# Scaled hit
+	elif roll > player_armor:
 		if passive_dodge_chance > 0.0 and randf() < passive_dodge_chance:
 			show_damage_popup(player, "dodge", "miss")
 			return "Enemy rolls %d → would HIT, but you DODGE!" % roll
-		var dmg_hit: int = enemy.damage
+		var mult := damage_multiplier_from_roll(roll, player_armor)
+		var dmg_hit: int = max(1, int(round(float(enemy.damage) * mult)))
 		_apply_player_damage(dmg_hit, "hit")
-		return "Enemy rolls %d → HIT for %d dmg." % [roll, dmg_hit]
-
-	# PUDŁO przeciwnika
-	else:
-		show_damage_popup(player, "dodge", "miss")
-		return "Enemy rolls %d → MISS." % roll
+		return "Enemy rolls %d vs Armor %d → HIT for %d dmg." % [roll, player_armor, dmg_hit]
+	return ""
 
 
 
@@ -1011,18 +1097,7 @@ func _apply_player_damage(dmg:int, kind:String = "hit") -> void:
 
 	var original:int = clamp(dmg, 0, 99999)
 
-	# DR z pancerza + pasywne DR Guardiana
-	var dr: float = 0.0
-	if not equipped_armor.is_empty():
-		dr = clamp(float(equipped_armor.get("dr", 0.0)), 0.0, 0.95)
-	# pasywne DR
-	if passive_dr_bonus > 0.0:
-		dr = clamp(dr + passive_dr_bonus, 0.0, 0.95)
-
-	var final_dmg:int = original
-	if dr > 0.0:
-		final_dmg = int(round(float(original) * (1.0 - dr)))
-	final_dmg = max(0, final_dmg)
+	var final_dmg:int = max(0, original)
 
 	if final_dmg <= 0:
 		show_damage_popup(player, "0", "hit")
@@ -1069,6 +1144,8 @@ func _transition_to_next_enemy() -> void:
 
 func calc_player_weapon_damage() -> int:
 	var base:int = int(weapon.get("base", weapon.get("damage", 10)))
+	var bonuses: Dictionary = weapon.get("bonuses", {})
+	base += int(bonuses.get("weapon_dmg", 0))
 	var wscale:Dictionary = weapon.get("scale", {})
 	var mult := 1.0
 	mult += float(player.strength) * STR_DMG_PER_POINT * float(wscale.get("str", 0.0))
@@ -1089,16 +1166,42 @@ func _on_player_hp_changed(cur:int, maxv:int) -> void:
 	if player_hp_bar:
 		player_hp_bar.max_value = maxv
 		player_hp_bar.value = cur
-	lbl_player.text = "Player HP: %d / %d\nWeapon: %s (DMG: %d)" % [
-		cur, maxv, weapon["name"], calc_player_weapon_damage()
+	var a := _calc_player_armor_total()
+	lbl_player.text = "Player HP: %d / %d\nWeapon: %s (DMG: %d)\nArmor: %d" % [
+		cur, maxv, weapon["name"], calc_player_weapon_damage(), a
 	]
 	_update_potions_ui()
+
+func _calc_player_armor_total() -> int:
+	var base := 0
+	if not equipped_armor.is_empty():
+		base = int(equipped_armor.get("armor", 0))
+	var types := []
+	for it in [equipped_armor, equipped_gloves, equipped_boots]:
+		if typeof(it) == TYPE_DICTIONARY and not (it as Dictionary).is_empty():
+			var t := String((it as Dictionary).get("armor_type", ""))
+			if t != "":
+				types.append(t)
+	# set bonus: 2 same -> +1, 3 same -> +2
+	var bonus := 0
+	if types.size() >= 2:
+		var counts := {}
+		for t in types:
+			counts[t] = int(counts.get(t, 0)) + 1
+		for t in counts.keys():
+			var c := int(counts[t])
+			if c == 2:
+				bonus = max(bonus, 1)
+			elif c >= 3:
+				bonus = max(bonus, 2)
+	return clamp(base + bonus, 0, 15)
 
 func _on_enemy_hp_changed(cur:int, maxv:int) -> void:
 	if enemy_hp_bar:
 		enemy_hp_bar.max_value = maxv
 		enemy_hp_bar.value = cur
-	lbl_enemy.text = "%s\nHP: %d / %d\nDMG: %d" % [enemy.name_display, cur, maxv, enemy.damage]
+	var a = clamp(int(current_enemy_data.get("armor", 0)), 0, 15)
+	lbl_enemy.text = "%s\nHP: %d / %d\nDMG: %d\nArmor: %d" % [enemy.name_display, cur, maxv, enemy.damage, a]
 
 func _on_enemy_defeated() -> void:
 	var last_enemy: Dictionary = {}
@@ -1170,6 +1273,7 @@ func _on_enemy_defeated() -> void:
 		dungeon_level += 1
 		print("[DUNGEON] Level up → dungeon_level=", dungeon_level)
 	if _is_current_boss(killed_name):
+		await _try_upgrade_weapon_on_boss_kill(last_enemy)
 		_offer_branch_choice_after_boss()
 		return
 
@@ -1178,6 +1282,166 @@ func _on_enemy_defeated() -> void:
 
 	await _transition_to_next_enemy()
 	set_turn(Turn.PLAYER)
+
+func _try_upgrade_weapon_on_boss_kill(enemy_data: Dictionary) -> void:
+	# Upgrade rule: weapon used to kill boss upgrades by +1 tier (in-place)
+	if _last_kill_context.is_empty():
+		return
+	var w_before: Dictionary = _last_kill_context.get("weapon_before", {})
+	if w_before.is_empty():
+		return
+	var old_r := int(w_before.get("rarity", Rarity.COMMON))
+	var new_r := _next_rarity(old_r)
+	if new_r == -1:
+		return
+
+	var deltas := upgrade_item_rarity_in_place(weapon, new_r)
+	await _show_weapon_upgrade_popup(w_before, weapon, deltas)
+	_update_labels()
+
+func _next_rarity(r: int) -> int:
+	match r:
+		Rarity.COMMON: return Rarity.RARE
+		Rarity.RARE:   return Rarity.EPIC
+		Rarity.EPIC:   return Rarity.LEGEND
+		_:            return -1
+
+func upgrade_item_rarity_in_place(item: Dictionary, new_rarity: int) -> Dictionary:
+	var deltas := {}
+	var old_r := int(item.get("rarity", Rarity.COMMON))
+	item["rarity"] = new_rarity
+
+	# If it's a weapon, bump base damage into the new rarity band.
+	if String(item.get("type", "")) == "weapon":
+		var mm: Vector2i = _weapon_base_minmax_for_rarity(new_rarity)
+		var old_base: int = int(item.get("base", 0))
+		# guarantee a bump if possible (prevents "no base gain" upgrades)
+		var min_target: int = max(old_base + 1, mm.x)
+		if min_target > mm.y:
+			min_target = mm.y
+		var target: int = int(randi_range(min_target, mm.y))
+		var new_base: int = target
+		if new_base != old_base:
+			item["base"] = new_base
+			deltas["base_dmg"] = new_base - old_base
+
+	# add one new rolled bonus appropriate for new rarity (guaranteed for boss upgrades)
+	var b := _roll_bonus_for_rarity_guaranteed(new_rarity)
+	if not b.is_empty():
+		var stat := String(b.get("stat", ""))
+		var val := int(b.get("value", 0))
+		if stat != "" and val > 0:
+			# prefer bonuses dict
+			var bonuses: Dictionary = item.get("bonuses", {})
+			bonuses[stat] = int(bonuses.get(stat, 0)) + val
+			item["bonuses"] = bonuses
+			deltas[stat] = int(deltas.get(stat, 0)) + val
+	# legacy fields stay as-is; we don't add new ones (prevents duplicate displays)
+	return deltas
+
+func _roll_bonus_for_rarity_guaranteed(rarity: int) -> Dictionary:
+	# Boss upgrades should always grant a visible stat gain.
+	match rarity:
+		Rarity.RARE:
+			return {"stat": _rand_bonus_stat(), "value": 1}
+		Rarity.EPIC:
+			return {"stat": _rand_bonus_stat(), "value": randi_range(2, 3)}
+		Rarity.LEGEND:
+			return {"stat": _rand_bonus_stat(), "value": randi_range(3, 8)}
+		_:
+			return {}
+
+func _show_weapon_upgrade_popup(old_w: Dictionary, new_w: Dictionary, deltas: Dictionary) -> void:
+	if not $CanvasLayer:
+		return
+	# Use Control-based popup (Window doesn't support modulate/scale tweens reliably)
+	var overlay := ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0.55)
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 500
+	$CanvasLayer.add_child(overlay)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(520, 260)
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.offset_left = -260
+	panel.offset_right = 260
+	panel.offset_top = -130
+	panel.offset_bottom = 130
+	panel.z_index = 501
+	$CanvasLayer.add_child(panel)
+
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 10)
+	panel.add_child(root)
+
+	var hdr := Label.new()
+	hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hdr.text = "%s → %s" % [_rarity_name(int(old_w.get("rarity", 0))), _rarity_name(int(new_w.get("rarity", 0)))]
+	hdr.add_theme_font_size_override("font_size", 22)
+	hdr.modulate = RARITY_COLORS.get(int(new_w.get("rarity", 0)), Color.WHITE)
+	if DMG_FONT: hdr.add_theme_font_override("font", DMG_FONT)
+	root.add_child(hdr)
+
+	var name := Label.new()
+	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name.text = String(new_w.get("name", "Weapon"))
+	name.add_theme_font_size_override("font_size", 18)
+	root.add_child(name)
+
+	var gained := Label.new()
+	gained.text = "Gained stats:"
+	gained.add_theme_font_size_override("font_size", 16)
+	root.add_child(gained)
+
+	var list := VBoxContainer.new()
+	root.add_child(list)
+	if deltas.is_empty():
+		# Fallback (should be rare now)
+		var l := Label.new()
+		l.text = "+0 (no bonus roll)"
+		list.add_child(l)
+	else:
+		for k in deltas.keys():
+			var stat := String(k).to_upper()
+			var val := int(deltas[k])
+			var l := Label.new()
+			if String(k) == "base_dmg":
+				l.text = "+%d BASE DMG" % val
+			else:
+				l.text = "+%d %s" % [val, stat]
+			l.modulate = Color(0.35, 1.0, 0.55, 1.0)
+			l.add_theme_font_size_override("font_size", 18)
+			if DMG_FONT: l.add_theme_font_override("font", DMG_FONT)
+			list.add_child(l)
+			# small pop animation per line
+			l.scale = Vector2.ONE * 0.9
+			var twl := get_tree().create_tween()
+			twl.tween_property(l, "scale", Vector2.ONE * 1.08, 0.12).from(l.scale)
+			twl.tween_property(l, "scale", Vector2.ONE, 0.12)
+
+	var close := Button.new()
+	close.text = "OK"
+	close.custom_minimum_size = Vector2(120, 40)
+	close.pressed.connect(func():
+		if is_instance_valid(panel): panel.queue_free()
+		if is_instance_valid(overlay): overlay.queue_free()
+	)
+	root.add_child(close)
+
+	panel.modulate.a = 0.0
+	panel.scale = Vector2(1.06, 1.06)
+	var tw := get_tree().create_tween()
+	tw.tween_property(panel, "modulate:a", 1.0, 0.15).from(0.0)
+	tw.parallel().tween_property(panel, "scale", Vector2.ONE, 0.15).from(panel.scale)
+
+	# Auto-continue after short time even if player doesn't click
+	await get_tree().create_timer(2.6).timeout
+	if is_instance_valid(panel):
+		panel.queue_free()
+	if is_instance_valid(overlay):
+		overlay.queue_free()
 
 func _on_player_damaged(amount:int) -> void:
 	shake_camera(8.0, 0.18)
@@ -1430,7 +1694,7 @@ func _play_d20_animation(final_roll: int) -> void:
 		return
 
 	var is_crit := (final_roll == CRIT)
-	var is_miss := (final_roll < HIT_DC)
+	var is_miss := false
 
 	# Losowe miejsce lądowania w okolicach centrum
 	var rand_offset := Vector2(randf_range(-60, 60), randf_range(-30, 30))
@@ -2654,8 +2918,8 @@ func _inventory_item_line(it: Dictionary) -> String:
 			var sagi := float(sc.get("agi",0.0))
 			line = "%s  (base:%d | STRx%.1f AGIx%.1f)" % [item_name, base, sstr, sagi]
 		"armor":
-			var dr := int(round(100.0 * float(it.get("dr",0.0))))
-			line = "%s  (DR:%d%%)" % [item_name, dr]
+			var a := int(it.get("armor", 0))
+			line = "%s  (Armor:%d)" % [item_name, a]
 		"helmet":
 			var hp := int(it.get("hp_bonus",0))
 			line = "%s  (+%d HP)" % [item_name, hp]
@@ -2670,6 +2934,10 @@ func _inventory_item_line(it: Dictionary) -> String:
 		var s := String(it["bonus_stat"]).to_upper()
 		var v := int(it["bonus_value"])
 		line += "  [%s +%d]" % [s, v]
+	if it.has("bonus_stat2") and int(it.get("bonus_value2",0)) > 0:
+		var s2 := String(it["bonus_stat2"]).to_upper()
+		var v2 := int(it["bonus_value2"])
+		line += "  [%s +%d]" % [s2, v2]
 
 	return line
 
@@ -2712,17 +2980,14 @@ func _equip_item(key:String, idx:int) -> void:
 
 	match key:
 		"weapon":
-			# przepisz do globalnego "weapon" + przenieś ewentualne bonusowe pola
-			weapon = {
-				"type": "weapon",
-				"name": it.get("name","???"),
-				"base": int(it.get("base", 10)),
-				"scale": it.get("scale", {"str":1.0,"agi":0.0}),
-				"bonus_stat": it.get("bonus_stat", ""),
-				"bonus_value": int(it.get("bonus_value", 0)),
-				"rarity": it.get("rarity", 0)
-				
-			}
+			# IMPORTANT: keep a reference to the inventory item (no copy),
+			# otherwise shrine/permanent and boss-upgrade desync from backpack.
+			weapon = it
+			# ensure expected fields exist
+			if not weapon.has("type"): weapon["type"] = "weapon"
+			if not weapon.has("base"): weapon["base"] = int(weapon.get("damage", 10))
+			if not weapon.has("scale"): weapon["scale"] = {"str": 1.0, "agi": 0.0}
+			if not weapon.has("bonuses"): weapon["bonuses"] = {}
 		"armor":
 			equipped_armor = it
 		"helmet":
@@ -2749,6 +3014,7 @@ func _equip_item(key:String, idx:int) -> void:
 
 	# 2) nałóż bonus z nowo założonego itemu w tym slocie
 	_apply_stat_bonus_for_slot(key, true)
+	_refresh_ring_skill()
 
 	_update_labels()
 	_refresh_inventory_ui()
@@ -2803,6 +3069,40 @@ func _unequip_item(key: String) -> void:
 
 	_update_labels()
 	_refresh_inventory_ui()
+	_refresh_ring_skill()
+
+func _refresh_ring_skill() -> void:
+	var ring_skill_id := ""
+	if not equipped_ring1.is_empty():
+		ring_skill_id = String(equipped_ring1.get("skill_id", ""))
+	if ring_skill_id == "" and not equipped_ring2.is_empty():
+		ring_skill_id = String(equipped_ring2.get("skill_id", ""))
+
+	# don't override class skill in slot 2
+	if skills.has(2) and String(skills[2].get("source", "")) == "class":
+		return
+
+	if ring_skill_id == "":
+		if skills.has(2) and String(skills[2].get("source", "")) == "ring":
+			skills.erase(2)
+		if skill_cooldowns.has(2):
+			skill_cooldowns.erase(2)
+		_update_skills_ui()
+		return
+
+	var sk: Dictionary = RING_SKILLS.get(ring_skill_id, {})
+	if sk.is_empty():
+		return
+	skills[2] = {
+		"key":  String(sk.get("key", "")),
+		"name": String(sk.get("name", "Ring Skill")),
+		"type": "active",
+		"desc": String(sk.get("desc", "")),
+		"source": "ring"
+	}
+	if not skill_cooldowns.has(2):
+		skill_cooldowns[2] = 0
+	_update_skills_ui()
 
 
 
@@ -2882,7 +3182,8 @@ func _rarity_name(r:int) -> String:
 		Rarity.COMMON:    return "COMMON"
 		Rarity.RARE:      return "RARE"
 		Rarity.EPIC:      return "EPIC"
-		Rarity.LEGENDARY: return "LEGENDARY"
+		Rarity.LEGEND:    return "LEGEND"
+		Rarity.UNIQUE:    return "UNIQUE"
 		_:                return "?"
 
 func _add_item_to_inventory(it:Dictionary) -> Dictionary:
@@ -2900,71 +3201,74 @@ func _add_item_to_inventory(it:Dictionary) -> Dictionary:
 		"necklace":
 			inventory["necklace"].append(it)
 			return {"key":"necklace","index":inventory["necklace"].size()-1}
+		"gloves":
+			inventory["gloves"].append(it)
+			return {"key":"gloves","index":inventory["gloves"].size()-1}
+		"boots":
+			inventory["boots"].append(it)
+			return {"key":"boots","index":inventory["boots"].size()-1}
+		"ring1":
+			inventory["ring1"].append(it)
+			return {"key":"ring1","index":inventory["ring1"].size()-1}
+		"ring2":
+			inventory["ring2"].append(it)
+			return {"key":"ring2","index":inventory["ring2"].size()-1}
 		_:
 			return {}
 
 func _show_loot_popup(item:Dictionary, key:String, idx:int) -> void:
-	# proste okno z kolorem rzadkości i przyciskiem "Equip now"
-	var win := Window.new()
-	win.title = "You found an item!"
-	win.unresizable = true
-	win.size = Vector2i(440, 220)
+	_show_loot_toast(item)
+
+func _show_loot_toast(item: Dictionary) -> void:
+	if not $CanvasLayer:
+		return
+	var rar:int = int(item.get("rarity", Rarity.COMMON))
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(520, 120)
+	panel.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	panel.offset_left = 60
+	panel.offset_right = -60
+	panel.offset_top = 60
+	panel.offset_bottom = 180
+	panel.z_index = 450
+	$CanvasLayer.add_child(panel)
 
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 10)
-	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	win.add_child(root)
+	root.add_theme_constant_override("separation", 6)
+	panel.add_child(root)
 
-	var headline := Label.new()
-	var rar:int = int(item.get("rarity", Rarity.COMMON))
-	headline.text = "%s  (%s)" % [str(item.get("name","???")), _rarity_name(rar)]
-	headline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	headline.add_theme_font_size_override("font_size", 20)
-	headline.modulate = RARITY_COLORS.get(rar, Color.WHITE)
-	if DMG_FONT: headline.add_theme_font_override("font", DMG_FONT)
-	root.add_child(headline)
+	var hdr := Label.new()
+	hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hdr.text = "ITEM FOUND"
+	hdr.add_theme_font_size_override("font_size", 18)
+	hdr.modulate = UI_COL["accent"]
+	if DMG_FONT: hdr.add_theme_font_override("font", DMG_FONT)
+	root.add_child(hdr)
+
+	var name := Label.new()
+	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name.text = "%s  (%s)" % [String(item.get("name","???")), _rarity_name(rar)]
+	name.add_theme_font_size_override("font_size", 20)
+	name.modulate = RARITY_COLORS.get(rar, Color.WHITE)
+	if DMG_FONT: name.add_theme_font_override("font", DMG_FONT)
+	root.add_child(name)
 
 	var stats := Label.new()
 	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stats.text = _inventory_item_line(item)
 	root.add_child(stats)
 
-	var btns := HBoxContainer.new()
-	btns.add_theme_constant_override("separation", 10)
-	btns.alignment = BoxContainer.ALIGNMENT_CENTER
-	root.add_child(btns)
-
-	var equip_btn := Button.new()
-	equip_btn.text = "Equip now"
-	btns.add_child(equip_btn)
-
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	btns.add_child(close_btn)
-
-	# logika
-	equip_btn.pressed.connect(func():
-		_equip_item(key, idx)
-		if is_instance_valid(win): win.queue_free()
-	)
-	close_btn.pressed.connect(func():
-		if is_instance_valid(win): win.queue_free()
-	)
-
-	# wstrzymujemy akcję, żeby gracz zauważył loot
-	if btn_attack: btn_attack.disabled = true
-	if $CanvasLayer:
-		$CanvasLayer.add_child(win)
-	else:
-		add_child(win)
-	win.popup_centered()
-	win.grab_focus()
-
-	# po zamknięciu przywróć Attack (jeśli to tura gracza i nic innego nie blokuje)
-	win.visibility_changed.connect(func():
-		if not win.visible and turn == Turn.PLAYER and btn_attack and (not stats_panel or not stats_panel.visible) and not inventory_open:
-			btn_attack.disabled = false
+	panel.modulate.a = 0.0
+	panel.position.y -= 10
+	var tw := get_tree().create_tween()
+	tw.tween_property(panel, "modulate:a", 1.0, 0.16).from(0.0)
+	tw.parallel().tween_property(panel, "position:y", panel.position.y + 10, 0.16)
+	tw.tween_interval(1.8)
+	tw.tween_property(panel, "modulate:a", 0.0, 0.18)
+	tw.finished.connect(func():
+		if is_instance_valid(panel):
+			panel.queue_free()
 	)
 
 
@@ -3019,7 +3323,7 @@ func _weapon_base_minmax_for_rarity(r:int) -> Vector2i:
 		Rarity.COMMON:    return Vector2i(8, 16)
 		Rarity.RARE:      return Vector2i(14, 20)
 		Rarity.EPIC:      return Vector2i(18, 30)
-		Rarity.LEGENDARY: return Vector2i(30, 100)
+		Rarity.LEGEND:    return Vector2i(30, 100)
 		_:                return Vector2i(8, 16)
 
 func _weighted_rarity_by_diff(diff:int) -> int:
@@ -3028,13 +3332,14 @@ func _weighted_rarity_by_diff(diff:int) -> int:
 		return _dev_forced_rarity
 	var weights: Dictionary = RARITY_WEIGHTS_BY_DIFF.get(diff, RARITY_WEIGHTS_BY_DIFF[1])
 	var total := 0
-	for r in [Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY]:
+	# Legend/Unique never drop from normal weighted table
+	for r in [Rarity.COMMON, Rarity.RARE, Rarity.EPIC]:
 		total += int(weights.get(r, 0))
 	if total <= 0:
 		return Rarity.COMMON
 	var pick := randi() % total
 	var acc := 0
-	for r in [Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY]:
+	for r in [Rarity.COMMON, Rarity.RARE, Rarity.EPIC]:
 		acc += int(weights.get(r,0))
 		if pick < acc:
 			return r
@@ -3062,14 +3367,17 @@ func _gen_random_item(slot_key:String, rarity:int, diff:int) -> Dictionary:
 			"Beads","Charm","Talisman","Pendant","Amulet","Sigil","Relic","Emblem","Icon","Medallion","Torque","Locket",
 			"Seal","Focus","Glimmer","Runestone","Sunshard","Moondrop","Aether","Spark","Halo","Glyph","Bond","Heart",
 			"Starshard","Dawnstone","Nightstone","Spirit","Totem","Crest"
-		]
+		],
+		"gloves": ["Leather","Chain","Runed","Warden","Vanguard","Storm","Ashen","Auric","Frost"],
+		"boots":  ["Leather","Chain","Runed","Warden","Vanguard","Storm","Ashen","Auric","Frost"],
+		"ring":   ["Band","Loop","Signet","Seal","Circle","Oath","Mark","Glyph","Rune"]
 	}
 
 	var suffix_by_rar: Dictionary = {
 		Rarity.COMMON:    ["","of the Field","of the Guard","of the Pawn","of the Footman"],
 		Rarity.RARE:      ["of Swiftness","of the Wolf","of the Oak","of Sparks","of the Gale","of the Stallion"],
 		Rarity.EPIC:      ["of Dawn","of the Storm","of Kings","of Nightfall","of the Colossus","of the Vanguard"],
-		Rarity.LEGENDARY: ["of Eternity","of the Sun","of the Ancients","of True North","of the First Forge"]
+		Rarity.LEGEND:    ["of Eternity","of the Sun","of the Ancients","of True North","of the First Forge"]
 	}
 
 	# delikatny wzrost mocy wraz z trudnością (łagodny, żeby balans nie odlatywał)
@@ -3093,6 +3401,12 @@ func _gen_random_item(slot_key:String, rarity:int, diff:int) -> Dictionary:
 			item_name = "%s %s %s" % [core, "Helm", suf]
 		"necklace":
 			item_name = "%s %s" % [core, "Talisman"]
+		"gloves":
+			item_name = "%s Gloves %s" % [core, suf]
+		"boots":
+			item_name = "%s Boots %s" % [core, suf]
+		"ring1", "ring2":
+			item_name = "%s %s" % [core, "Ring"]
 		_:
 			item_name = core
 
@@ -3133,28 +3447,47 @@ func _gen_random_item(slot_key:String, rarity:int, diff:int) -> Dictionary:
 			return item
 
 		"armor":
-			# DR (reduction) 5–35%, rośnie delikatnie z diff + rare
-			var dr_base: float = clamp(0.05 + 0.025 * float(diff), 0.05, 0.30)
-			var rare_boost: float = 0.0
+			# Armor (0-15)
+			var armor_base = clamp(1 + diff, 1, 10)
+			var rare_boost := 0
 			match rarity:
 				Rarity.RARE:
-					rare_boost = 0.02
+					rare_boost = 1
 				Rarity.EPIC:
-					rare_boost = 0.05
-				Rarity.LEGENDARY:
-					rare_boost = 0.08
-			var dr: float = clamp(dr_base + rare_boost, 0.05, 0.35)
-			dr = snappedf(dr, 0.01)
-
+					rare_boost = 2
+				Rarity.LEGEND:
+					rare_boost = 3
+			var armor_val: int = clamp(armor_base + rare_boost, 0, 15)
+			var at := _rand_armor_type()
 			var item2: Dictionary = {
 				"type":"armor","name":item_name,"rarity":rarity,
-				"dr": dr
+				"armor": armor_val,
+				"armor_type": at,
+				"bonuses": _roll_armor_family_bonuses("armor", rarity, at)
 			}
-			var b2: Dictionary = _roll_bonus_for_rarity(rarity)
-			if not b2.is_empty():
-				item2["bonus_stat"] = b2["stat"]
-				item2["bonus_value"] = int(b2["value"])
 			return item2
+
+		"gloves":
+			var gt := _rand_armor_type()
+			return {
+				"type":"gloves","name":item_name,"rarity":rarity,
+				"armor_type": gt,
+				"bonuses": _roll_armor_family_bonuses("gloves", rarity, gt)
+			}
+
+		"boots":
+			var bt := _rand_armor_type()
+			return {
+				"type":"boots","name":item_name,"rarity":rarity,
+				"armor_type": bt,
+				"bonuses": _roll_armor_family_bonuses("boots", rarity, bt)
+			}
+
+		"ring1", "ring2":
+			return {
+				"type": slot_key, "name": item_name, "rarity": rarity,
+				"skill_id": "ring_skill_placeholder"
+			}
 
 		"helmet":
 			# HP bonus – łagodnie z diff i rare
@@ -3165,18 +3498,17 @@ func _gen_random_item(slot_key:String, rarity:int, diff:int) -> Dictionary:
 					rare_mult = 1.15
 				Rarity.EPIC:
 					rare_mult = 1.32
-				Rarity.LEGENDARY:
+				Rarity.LEGEND:
 					rare_mult = 1.55
 			var hp: int = int(round(hp_base * rare_mult))
 
+			var ht := _rand_armor_type()
 			var item3: Dictionary = {
 				"type":"helmet","name":item_name,"rarity":rarity,
-				"hp_bonus": hp
+				"hp_bonus": hp,
+				"armor_type": ht,
+				"bonuses": _roll_armor_family_bonuses("helmet", rarity, ht)
 			}
-			var b3: Dictionary = _roll_bonus_for_rarity(rarity)
-			if not b3.is_empty():
-				item3["bonus_stat"] = b3["stat"]
-				item3["bonus_value"] = int(b3["value"])
 			return item3
 
 		"necklace":
@@ -3188,7 +3520,7 @@ func _gen_random_item(slot_key:String, rarity:int, diff:int) -> Dictionary:
 					rare_mult2 = 1.15
 				Rarity.EPIC:
 					rare_mult2 = 1.35
-				Rarity.LEGENDARY:
+				Rarity.LEGEND:
 					rare_mult2 = 1.60
 			critb = snappedf(critb * rare_mult2, 0.01)
 
@@ -3383,10 +3715,48 @@ func _roll_bonus_for_rarity(rarity:int) -> Dictionary:
 			return {}
 		Rarity.EPIC:
 			return {"stat": _rand_bonus_stat(), "value": randi_range(2, 3)}
-		Rarity.LEGENDARY:
+		Rarity.LEGEND:
 			return {"stat": _rand_bonus_stat(), "value": randi_range(3, 8)}
+		Rarity.UNIQUE:
+			return {}
 		_:
 			return {}
+
+func _rand_armor_type() -> String:
+	var types := ["light", "medium", "heavy", "berserker"]
+	return types[randi() % types.size()]
+
+func _bonus_range_for_rarity(rarity: int) -> Vector2i:
+	match rarity:
+		Rarity.COMMON:
+			return Vector2i(0, 1)
+		Rarity.RARE:
+			return Vector2i(1, 2)
+		Rarity.EPIC:
+			return Vector2i(2, 4)
+		Rarity.LEGEND:
+			return Vector2i(4, 7)
+		Rarity.UNIQUE:
+			return Vector2i(0, 0)
+		_:
+			return Vector2i(0, 1)
+
+func _roll_armor_family_bonuses(_slot: String, rarity: int, armor_type: String) -> Dictionary:
+	# Slot currently doesn't change behavior; kept for future tuning.
+	var t := armor_type
+	var r := _bonus_range_for_rarity(rarity)
+	var v := randi_range(r.x, r.y)
+	var bonuses := {}
+	match t:
+		"light":
+			bonuses["agi"] = v
+		"medium":
+			bonuses["str"] = v
+		"heavy":
+			bonuses["vit"] = v
+		"berserker":
+			bonuses["weapon_dmg"] = v
+	return bonuses
 
 func _get_equipped_item_for_slot(key:String) -> Dictionary:
 	match key:
@@ -3414,8 +3784,23 @@ func _apply_stat_bonus_for_slot(key:String, apply:bool) -> void:
 	var it := _get_equipped_item_for_slot(key)
 	if it.is_empty():
 		return
-	var stat := String(it.get("bonus_stat",""))
-	var val  := int(it.get("bonus_value", 0))
+	var vit_before: int = player.vitality
+	_apply_bonuses_dict(it, apply)
+	_apply_one_bonus(it, "bonus_stat", "bonus_value", apply)
+	_apply_one_bonus(it, "bonus_stat2", "bonus_value2", apply)
+	if player.vitality != vit_before:
+		_recalc_hp_from_vitality()
+	# odśwież UI statystyk po zmianie
+	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+
+func _recalc_hp_from_vitality() -> void:
+	# Keep HP/max_hp in sync when vitality changes via item bonuses.
+	if player and player.has_method("_recalc_max_hp_from_stats"):
+		player.call("_recalc_max_hp_from_stats", true)
+
+func _apply_one_bonus(it: Dictionary, stat_key: String, val_key: String, apply: bool) -> void:
+	var stat := String(it.get(stat_key, ""))
+	var val  := int(it.get(val_key, 0))
 	if stat == "" or val <= 0:
 		return
 	var delta := val if apply else -val
@@ -3430,8 +3815,32 @@ func _apply_stat_bonus_for_slot(key:String, apply:bool) -> void:
 			player.crit     += delta
 		_:
 			pass
-	# odśwież UI statystyk po zmianie
-	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
+
+func _apply_bonuses_dict(it: Dictionary, apply: bool) -> void:
+	var bonuses: Dictionary = it.get("bonuses", {})
+	if bonuses.is_empty():
+		return
+	for k in bonuses.keys():
+		var key := String(k)
+		var val := int(bonuses.get(k, 0))
+		if val == 0:
+			continue
+		var delta := val if apply else -val
+		match key:
+			"str":
+				player.strength += delta
+			"agi":
+				player.agility += delta
+			"vit":
+				player.vitality += delta
+			"crit":
+				player.crit += delta
+			"weapon_dmg":
+				# flat bonus is applied in calc_player_weapon_damage via weapon["bonuses"]
+				# so nothing to do here (kept for future if we store it elsewhere)
+				pass
+			_:
+				pass
 
 func _create_skills_ui() -> void:
 	if skills_panel:
@@ -3630,6 +4039,7 @@ func _skill_power_strike(slot:int) -> void:
 
 	var base_dmg: int = calc_player_weapon_damage()
 	var dmg := int(round(float(base_dmg) * calc_crit_multiplier_safe()))
+	_last_kill_context = {"roll": CRIT, "weapon_before": weapon.duplicate(true)}
 	enemy.take_damage(dmg)
 	show_damage_popup(enemy, str(dmg), "crit")
 	if lbl_log:
@@ -3677,6 +4087,7 @@ func _skill_basic_strike(slot:int) -> void:
 
 	var base_dmg: int = calc_player_weapon_damage()
 	var dmg := int(round(float(base_dmg) * 1.2))
+	_last_kill_context = {"roll": -1, "weapon_before": weapon.duplicate(true)}
 	enemy.take_damage(dmg)
 	show_damage_popup(enemy, str(dmg), "hit")
 	if lbl_log:
@@ -3701,6 +4112,7 @@ func _skill_quick_slash(slot:int) -> void:
 	var h2 = max(1, int(round(base * randf_range(0.60, 1.00))))
 	var total = h1 + h2
 
+	_last_kill_context = {"roll": -1, "weapon_before": weapon.duplicate(true)}
 	enemy.take_damage(h1)
 	show_damage_popup(enemy, str(h1), "hit")
 	await get_tree().create_timer(0.05).timeout
@@ -3802,7 +4214,8 @@ func _grant_class_skills(class_key: String) -> void:
 				"key":"power_strike",
 				"name":"Power Strike",
 				"type":"active",
-				"desc":"Guaranteed critical hit, costs 10% current HP."
+				"desc":"Guaranteed critical hit, costs 10% current HP.",
+				"source":"class"
 			}
 			skill_cooldowns[2] = 0
 			# (brak pasywki – możesz dodać własną później)
@@ -3813,7 +4226,8 @@ func _grant_class_skills(class_key: String) -> void:
 				"key":"quick_slash",
 				"name":"Quick Slash",
 				"type":"active",
-				"desc":"Two swift hits (60–100% dmg each)."
+				"desc":"Two swift hits (60–100% dmg each).",
+				"source":"class"
 			}
 			skill_cooldowns[2] = 0
 			# Passive: Cat Movement (5% dodge)
@@ -3825,7 +4239,8 @@ func _grant_class_skills(class_key: String) -> void:
 				"key":"shield",
 				"name":"Shield",
 				"type":"active",
-				"desc":"Block the next incoming hit."
+				"desc":"Block the next incoming hit.",
+				"source":"class"
 			}
 			skill_cooldowns[2] = 0
 			# Passive: Heavily Armed (+10% DR)
@@ -3837,7 +4252,8 @@ func _grant_class_skills(class_key: String) -> void:
 				"key":"fury",
 				"name":"Fury",
 				"type":"active",
-				"desc":"Two back-to-back attacks."
+				"desc":"Two back-to-back attacks.",
+				"source":"class"
 			}
 			skill_cooldowns[2] = 0
 			# Passive: Bloodlust – lekki lifesteal z CRIT (jeśli używasz w logice ataku)
@@ -4106,7 +4522,7 @@ func _apply_icons_to_inventory_list() -> void:
 		return
 
 	# aktualna zakładka
-	var tab_keys: Array[String] = ["weapon", "armor", "helmet", "necklace"]
+	var tab_keys: Array[String] = ["weapon", "armor", "helmet", "necklace", "gloves", "boots", "ring1", "ring2"]
 	var key_index: int = clamp(inv_tab_index, 0, tab_keys.size() - 1)
 	var slot_key: String = tab_keys[key_index]
 
@@ -4126,6 +4542,13 @@ func _apply_icons_to_inventory_list() -> void:
 
 		var item_name := main_label.text.to_lower()
 		var guess_type := slot_key
+
+		# prefer slot+armor_type mapping if present in text (fallback for old UI)
+		# (new inventory uses item dict directly; old list only has label text)
+		for at in ["light", "medium", "heavy", "berserker"]:
+			if item_name.find(at) >= 0 and ICON_BY_TYPE.has("%s_%s" % [slot_key, at]):
+				guess_type = "%s_%s" % [slot_key, at]
+				break
 
 		# dla broni rozpoznaj typ po nazwie
 		if slot_key == "weapon":
@@ -4259,7 +4682,7 @@ func _slot_style_for(rarity: int, selected: bool, hovered: bool) -> StyleBoxText
 		if h: 
 			return h
 	match rarity:
-		Rarity.LEGENDARY:
+		Rarity.LEGEND:
 			var a := _sb9(SLOT_LEG)
 			if a:
 				return a
@@ -4329,8 +4752,8 @@ func _scroll_inventory_to_selection() -> void:
 # DEV / DEBUG: generuje po 10 losowych itemów każdego typu
 # ===============================
 func _dev_fill_inventory() -> void:
-	var types := ["weapon", "armor", "helmet", "necklace"]
-	var _rarities := [Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGENDARY]
+	var types := ["weapon", "armor", "helmet", "necklace", "gloves", "boots", "ring1", "ring2"]
+	var _rarities := [Rarity.COMMON, Rarity.RARE, Rarity.EPIC, Rarity.LEGEND]
 
 	for t in types:
 		if not inventory.has(t):
@@ -4341,7 +4764,7 @@ func _dev_fill_inventory() -> void:
 			var r_roll := randf()
 			var rarity := Rarity.COMMON
 			if r_roll > 0.9:
-				rarity = Rarity.LEGENDARY
+				rarity = Rarity.LEGEND
 			elif r_roll > 0.7:
 				rarity = Rarity.EPIC
 			elif r_roll > 0.45:
@@ -4444,14 +4867,46 @@ func _ensure_shrine_dialog() -> void:
 	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	header.add_child(title_lbl)
 
+	var body := HBoxContainer.new()
+	body.add_theme_constant_override("separation", 12)
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.size_flags_vertical   = Control.SIZE_EXPAND_FILL
+	header.add_child(body)
+
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical   = Control.SIZE_EXPAND_FILL
-	header.add_child(scroll)
+	scroll.custom_minimum_size = Vector2(380, 0)
+	body.add_child(scroll)
 
 	shrine_list_box = VBoxContainer.new()
 	shrine_list_box.add_theme_constant_override("separation", 8)
 	scroll.add_child(shrine_list_box)
+
+	var preview_panel := PanelContainer.new()
+	preview_panel.custom_minimum_size = Vector2(260, 0)
+	preview_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_child(preview_panel)
+
+	var pvbox := VBoxContainer.new()
+	pvbox.add_theme_constant_override("separation", 8)
+	preview_panel.add_child(pvbox)
+
+	var ptitle := Label.new()
+	ptitle.text = "Preview"
+	ptitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ptitle.add_theme_font_size_override("font_size", 18)
+	pvbox.add_child(ptitle)
+
+	shrine_preview = RichTextLabel.new()
+	shrine_preview.bbcode_enabled = true
+	shrine_preview.fit_content = false
+	shrine_preview.scroll_active = true
+	shrine_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shrine_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	shrine_preview.text = "Hover an item to preview its stats."
+	pvbox.add_child(shrine_preview)
 
 	# przycisk wyjścia
 	shrine_dialog.add_button("Leave the Shrine", true, "leave")
@@ -4513,7 +4968,7 @@ func _fill_shrine_dialog_items() -> void:
 	for c in shrine_list_box.get_children():
 		c.queue_free()
 
-	var keys: Array[String] = ["weapon","armor","helmet","necklace"]
+	var keys: Array[String] = ["weapon","armor","helmet","necklace","gloves","boots","ring1","ring2"]
 	var any_added := false
 
 	for k in keys:
@@ -4534,7 +4989,12 @@ func _fill_shrine_dialog_items() -> void:
 			row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 			var lbl := Label.new()
-			lbl.text = str(it.get("name","?"))
+			var nm := str(it.get("name","?"))
+			var rar := _rarity_name(int(it.get("rarity", Rarity.COMMON)))
+			var eq := ""
+			if _is_item_equipped(k, i):
+				eq = " (equipped)"
+			lbl.text = "%s [%s]%s" % [nm, rar, eq]
 			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_child(lbl)
 
@@ -4542,9 +5002,16 @@ func _fill_shrine_dialog_items() -> void:
 			btn.text = "Make Permanent"
 			btn.disabled = bool(it.get("permanent", false))
 			btn.pressed.connect(func(_k:=k, _idx:=i):
-				_on_shrine_pick_permanent(_k, _idx)
+				_open_shrine_confirm(_k, _idx)
 			)
 			row.add_child(btn)
+
+			# Preview on hover
+			var captured_k := k
+			var captured_idx := i
+			row.mouse_entered.connect(func():
+				_update_shrine_preview(captured_k, captured_idx)
+			)
 
 			shrine_list_box.add_child(row)
 			any_added = true
@@ -4554,6 +5021,123 @@ func _fill_shrine_dialog_items() -> void:
 		info.text = "(No items to choose)"
 		info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		shrine_list_box.add_child(info)
+	if shrine_preview:
+		shrine_preview.text = "Hover an item to preview its stats."
+
+func _update_shrine_preview(slot_key: String, idx: int) -> void:
+	if not shrine_preview:
+		return
+	var items: Array = inventory.get(slot_key, [])
+	if idx < 0 or idx >= items.size():
+		shrine_preview.text = ""
+		return
+	var it: Dictionary = items[idx]
+	shrine_preview.text = _shrine_item_details_bbcode(it, slot_key)
+
+func _shrine_item_details_bbcode(it: Dictionary, slot_key: String) -> String:
+	var rar := int(it.get("rarity", Rarity.COMMON))
+	var name := String(it.get("name", "?"))
+	var header := "[b]%s[/b]  [color=%s](%s)[/color]" % [_bb_escape(name), _bb_color_hex(RARITY_COLORS.get(rar, Color.WHITE)), _rarity_name(rar)]
+	var body := _bb_escape(_inventory_item_line(it))
+	if String(it.get("armor_type","")) != "":
+		body += "\nType: %s" % String(it.get("armor_type","")).capitalize()
+	if bool(it.get("permanent", false)):
+		body += "\n[color=#54D17A][b]PERMANENT[/b][/color]"
+	return header + "\n" + body
+
+func _bb_color_hex(c: Color) -> String:
+	return "%02x%02x%02x" % [int(c.r * 255.0), int(c.g * 255.0), int(c.b * 255.0)]
+
+func _bb_escape(s: String) -> String:
+	return s.replace("[", "\\[").replace("]", "\\]")
+
+func _open_shrine_confirm(slot_key: String, idx: int) -> void:
+	if _shrine_locked:
+		return
+	var items: Array = inventory.get(slot_key, [])
+	if idx < 0 or idx >= items.size():
+		return
+	var it: Dictionary = items[idx]
+	if bool(it.get("permanent", false)):
+		return
+
+	_shrine_pending_key = slot_key
+	_shrine_pending_idx = idx
+
+	# overlay
+	if _shrine_confirm_overlay and is_instance_valid(_shrine_confirm_overlay):
+		_shrine_confirm_overlay.queue_free()
+	if _shrine_confirm_panel and is_instance_valid(_shrine_confirm_panel):
+		_shrine_confirm_panel.queue_free()
+
+	_shrine_confirm_overlay = ColorRect.new()
+	_shrine_confirm_overlay.color = Color(0, 0, 0, 0.6)
+	_shrine_confirm_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_shrine_confirm_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	shrine_dialog.add_child(_shrine_confirm_overlay)
+
+	_shrine_confirm_panel = PanelContainer.new()
+	_shrine_confirm_panel.custom_minimum_size = Vector2(520, 260)
+	_shrine_confirm_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_shrine_confirm_panel.offset_left = -260
+	_shrine_confirm_panel.offset_right = 260
+	_shrine_confirm_panel.offset_top = -130
+	_shrine_confirm_panel.offset_bottom = 130
+	shrine_dialog.add_child(_shrine_confirm_panel)
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	_shrine_confirm_panel.add_child(v)
+
+	var t := Label.new()
+	t.text = "Make this item PERMANENT?"
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.add_theme_font_size_override("font_size", 20)
+	v.add_child(t)
+
+	var rt := RichTextLabel.new()
+	rt.bbcode_enabled = true
+	rt.fit_content = false
+	rt.scroll_active = true
+	rt.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	rt.text = _shrine_item_details_bbcode(it, slot_key)
+	v.add_child(rt)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	v.add_child(row)
+
+	var ok := Button.new()
+	ok.text = "Confirm"
+	ok.pressed.connect(_confirm_shrine_permanent)
+	row.add_child(ok)
+
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.pressed.connect(_cancel_shrine_confirm)
+	row.add_child(cancel)
+
+	_shrine_confirm_panel.modulate.a = 0.0
+	_shrine_confirm_panel.scale = Vector2(1.05, 1.05)
+	var tw := get_tree().create_tween()
+	tw.tween_property(_shrine_confirm_panel, "modulate:a", 1.0, 0.12).from(0.0)
+	tw.parallel().tween_property(_shrine_confirm_panel, "scale", Vector2.ONE, 0.12).from(_shrine_confirm_panel.scale)
+
+func _cancel_shrine_confirm() -> void:
+	if _shrine_confirm_panel and is_instance_valid(_shrine_confirm_panel):
+		_shrine_confirm_panel.queue_free()
+	if _shrine_confirm_overlay and is_instance_valid(_shrine_confirm_overlay):
+		_shrine_confirm_overlay.queue_free()
+	_shrine_pending_key = ""
+	_shrine_pending_idx = -1
+
+func _confirm_shrine_permanent() -> void:
+	if _shrine_pending_key == "" or _shrine_pending_idx < 0:
+		_cancel_shrine_confirm()
+		return
+	_on_shrine_pick_permanent(_shrine_pending_key, _shrine_pending_idx)
+	_cancel_shrine_confirm()
 
 
 

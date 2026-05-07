@@ -31,10 +31,29 @@ const ICON_BY_TYPE := {
 	"bow":      "res://ikony/bow_icon.png",
 	"crossbow": "res://ikony/crossbow_icon.png",
 	"armor":    "res://ikony/armor_icon.png",
+	"armor_light":     "res://ikony/armor_light_icon.png",
+	"armor_medium":    "res://ikony/armor_medium_icon.png",
+	"armor_heavy":     "res://ikony/armor_heavy_icon.png",
+	"armor_berserker": "res://ikony/armor_berserker_icon.png",
 	"helmet":   "res://ikony/helmet_icon.png",
+	"helmet_light":     "res://ikony/helmet_light_icon.png",
+	"helmet_medium":    "res://ikony/helmet_medium_icon.png",
+	"helmet_heavy":     "res://ikony/helmet_heavy_icon.png",
+	"helmet_berserker": "res://ikony/helmet_berserker_icon.png",
 	"necklace": "res://ikony/necklace_icon.png",
 	"gloves":   "res://ikony/gloves_icon.png",
+	"gloves_light":     "res://ikony/gloves_light_icon.png",
+	"gloves_medium":    "res://ikony/gloves_medium_icon.png",
+	"gloves_heavy":     "res://ikony/gloves_heavy_icon.png",
+	"gloves_berserker": "res://ikony/gloves_berserker_icon.png",
 	"boots":    "res://ikony/boots_icon.png",
+	"boots_light":     "res://ikony/boots_light_icon.png",
+	"boots_medium":    "res://ikony/boots_medium_icon.png",
+	"boots_heavy":     "res://ikony/boots_heavy_icon.png",
+	"boots_berserker": "res://ikony/boots_berserker_icon.png",
+	"ring":    "res://ikony/ring_icon.png",
+	"ring1":   "res://ikony/ring_icon.png",
+	"ring2":   "res://ikony/ring_icon.png",
 }
 
 const CLASS_TEX := {
@@ -50,8 +69,9 @@ const RARITY_COLORS := [
 	Color(0.30, 0.65, 1.00, 1.0),
 	Color(0.70, 0.35, 1.00, 1.0),
 	Color(1.00, 0.80, 0.10, 1.0),
+	Color(0.30, 1.00, 0.85, 1.0),
 ]
-const RARITY_NAMES := ["Common", "Rare", "Epic", "Legendary"]
+const RARITY_NAMES := ["Common", "Rare", "Epic", "Legend", "Unique"]
 
 var _font: FontFile = null
 var inventory: Dictionary = {}
@@ -429,7 +449,7 @@ func _refresh_slot(slot_key: String) -> void:
 		lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		vbox.add_child(lbl)
 	else:
-		var r: int     = clamp(int(item.get("rarity", 0)), 0, 3)
+		var r: int     = clamp(int(item.get("rarity", 0)), 0, RARITY_COLORS.size() - 1)
 		var col: Color = RARITY_COLORS[r]
 		_set_panel_border(panel, col)
 		var tex: Texture2D = _resolve_icon(item)
@@ -515,7 +535,7 @@ func _refresh_backpack() -> void:
 		var item: Dictionary    = entry["item"]
 		var slot_key: String    = entry["slot"]
 		var idx: int            = entry["idx"]
-		var r: int              = clamp(int(item.get("rarity", 0)), 0, 3)
+		var r: int              = clamp(int(item.get("rarity", 0)), 0, RARITY_COLORS.size() - 1)
 		var col: Color          = RARITY_COLORS[r]
 
 		var tile := PanelContainer.new()
@@ -589,7 +609,7 @@ func _refresh_backpack() -> void:
 
 func _select_item(item: Dictionary, slot_key: String, idx: int, tile: PanelContainer) -> void:
 	if _selected_tile and is_instance_valid(_selected_tile):
-		var prev_r: int = clamp(int(selected_item.get("rarity", 0)), 0, 3)
+		var prev_r: int = clamp(int(selected_item.get("rarity", 0)), 0, RARITY_COLORS.size() - 1)
 		_set_panel_border(_selected_tile as PanelContainer, RARITY_COLORS[prev_r])
 	selected_item  = item
 	selected_slot  = slot_key
@@ -635,7 +655,7 @@ func _on_drop() -> void:
 		_refresh_backpack()
 
 func _show_item_details(item: Dictionary, slot_key: String, from_hover: bool, idx: int = -1) -> void:
-	var r: int = clamp(int(item.get("rarity", 0)), 0, 3)
+	var r: int = clamp(int(item.get("rarity", 0)), 0, RARITY_COLORS.size() - 1)
 	_item_name.text = "%s  [%s]" % [str(item.get("name", "?")), RARITY_NAMES[r]]
 	_item_name.add_theme_color_override("font_color", RARITY_COLORS[r])
 	var lines := _build_item_description(item, slot_key)
@@ -659,18 +679,48 @@ func _build_item_description(item: Dictionary, slot_key: String) -> String:
 				for k in scale_dict:
 					s += "  %s×%.1f" % [k.to_upper(), float(scale_dict[k])]
 				lines += "\nScaling:%s" % s
+			var bdict: Dictionary = item.get("bonuses", {})
+			if not bdict.is_empty() and int(bdict.get("weapon_dmg", 0)) != 0:
+				lines += "\nFlat DMG: %+d" % int(bdict.get("weapon_dmg", 0))
 		"armor":
-			lines += "\nDamage Reduction: %.0f%%" % (float(item.get("dr", 0)) * 100)
+			if item.has("armor"):
+				lines += "\nArmor: %d" % int(item.get("armor", 0))
+			else:
+				lines += "\nDamage Reduction: %.0f%%" % (float(item.get("dr", 0)) * 100)
+			if String(item.get("armor_type", "")) != "":
+				lines += "\nType: %s" % String(item.get("armor_type", "")).capitalize()
 		"helmet":
 			lines += "\nHP Bonus: +%d" % int(item.get("hp_bonus", 0))
+			if String(item.get("armor_type", "")) != "":
+				lines += "\nType: %s" % String(item.get("armor_type", "")).capitalize()
 		"necklace":
 			lines += "\nBonus: %s" % str(item.get("bonus_stat", "—")).to_upper()
-		"gloves", "boots", "ring1", "ring2":
-			lines += "\nBase: %d" % int(item.get("base", 0))
+		"gloves", "boots":
+			if String(item.get("armor_type", "")) != "":
+				lines += "\nType: %s" % String(item.get("armor_type", "")).capitalize()
+		"ring1", "ring2":
+			lines += "\nSkill: %s" % String(item.get("skill_id", "—"))
 	var bonus_stat: String = str(item.get("bonus_stat", ""))
 	var bonus_value: int   = int(item.get("bonus_value", 0))
-	if bonus_stat != "" and slot_key != "necklace":
-		lines += "\nBonus: +%d %s" % [bonus_value, bonus_stat.to_upper()]
+	var bonus_stat2: String = str(item.get("bonus_stat2", ""))
+	var bonus_value2: int   = int(item.get("bonus_value2", 0))
+	var totals: Dictionary = {}
+	var bonuses: Dictionary = item.get("bonuses", {})
+	if not bonuses.is_empty():
+		for k in bonuses.keys():
+			totals[String(k)] = int(bonuses.get(k, 0))
+	# merge legacy into totals (so each stat shows once)
+	if bonus_stat != "" and bonus_value != 0 and slot_key != "necklace":
+		var k1 := bonus_stat.to_lower()
+		totals[k1] = int(totals.get(k1, 0)) + bonus_value
+	if bonus_stat2 != "" and bonus_value2 != 0 and slot_key != "necklace":
+		var k2 := bonus_stat2.to_lower()
+		totals[k2] = int(totals.get(k2, 0)) + bonus_value2
+
+	for key in ["str", "agi", "vit", "crit"]:
+		var v := int(totals.get(key, 0))
+		if v != 0:
+			lines += "\nBonus: %+d %s" % [v, key.to_upper()]
 	if bool(item.get("permanent", false)):
 		lines += "\n★ PERMANENT"
 	return lines
@@ -684,10 +734,16 @@ func _build_compare_block(candidate: Dictionary, equipped_item: Dictionary, slot
 			var delta_base := cand_base - eq_base
 			cmp_lines += "\nBase: %d (%s)" % [cand_base, _fmt_delta(delta_base, false)]
 		"armor":
-			var cand_dr := float(candidate.get("dr", 0))
-			var eq_dr := float(equipped_item.get("dr", 0))
-			var delta_dr := (cand_dr - eq_dr) * 100.0
-			cmp_lines += "\nDR: %.0f%% (%s)" % [cand_dr * 100.0, _fmt_delta(delta_dr, true)]
+			if candidate.has("armor") or equipped_item.has("armor"):
+				var cand_a := int(candidate.get("armor", 0))
+				var eq_a := int(equipped_item.get("armor", 0))
+				var delta_a := cand_a - eq_a
+				cmp_lines += "\nArmor: %d (%s)" % [cand_a, _fmt_delta(delta_a, false)]
+			else:
+				var cand_dr := float(candidate.get("dr", 0))
+				var eq_dr := float(equipped_item.get("dr", 0))
+				var delta_dr := (cand_dr - eq_dr) * 100.0
+				cmp_lines += "\nDR: %.0f%% (%s)" % [cand_dr * 100.0, _fmt_delta(delta_dr, true)]
 		"helmet":
 			var cand_hp := int(candidate.get("hp_bonus", 0))
 			var eq_hp := int(equipped_item.get("hp_bonus", 0))
@@ -796,6 +852,20 @@ func _resolve_icon(item: Dictionary) -> Texture2D:
 	var name_lower: String = str(item.get("name", "")).to_lower()
 	var slot_key: String   = str(item.get("type", ""))
 	var guess := slot_key
+
+	# Rings: allow mapping by "ring" (fallback) or exact "ring1"/"ring2"
+	if slot_key == "ring1" or slot_key == "ring2":
+		if ICON_BY_TYPE.has(slot_key):
+			guess = slot_key
+		elif ICON_BY_TYPE.has("ring"):
+			guess = "ring"
+
+	# Prefer slot-specific icon by armor_type (e.g. armor_light)
+	var armor_type := String(item.get("armor_type", ""))
+	if armor_type != "" and (slot_key == "armor" or slot_key == "gloves" or slot_key == "boots" or slot_key == "helmet"):
+		var key := "%s_%s" % [slot_key, armor_type.to_lower()]
+		if ICON_BY_TYPE.has(key):
+			guess = key
 	if slot_key == "weapon":
 		for t in ICON_BY_TYPE.keys():
 			if name_lower.find(t) >= 0:
