@@ -664,6 +664,9 @@ func _ready() -> void:
 			inventory_screen.player_stats["max_hp"] = player.max_hp
 			inventory_screen._refresh_stats()
 		)
+		inventory_screen.set_run_player_texture_supplier(func() -> Variant:
+			return player.texture
+		)
 
 	# ... koniec _ready() 
 	print("[DEBUG] _ready() END")
@@ -1142,10 +1145,21 @@ func _transition_to_next_enemy() -> void:
 		btn_attack.disabled = false
 
 
+func _flat_weapon_dmg_from_armor_pieces() -> int:
+	var total := 0
+	for it in [equipped_helmet, equipped_armor, equipped_gloves, equipped_boots]:
+		if typeof(it) != TYPE_DICTIONARY or (it as Dictionary).is_empty():
+			continue
+		var b: Dictionary = (it as Dictionary).get("bonuses", {})
+		total += int(b.get("weapon_dmg", 0))
+	return total
+
+
 func calc_player_weapon_damage() -> int:
 	var base:int = int(weapon.get("base", weapon.get("damage", 10)))
 	var bonuses: Dictionary = weapon.get("bonuses", {})
 	base += int(bonuses.get("weapon_dmg", 0))
+	base += _flat_weapon_dmg_from_armor_pieces()
 	var wscale:Dictionary = weapon.get("scale", {})
 	var mult := 1.0
 	mult += float(player.strength) * STR_DMG_PER_POINT * float(wscale.get("str", 0.0))
@@ -1180,7 +1194,8 @@ func _calc_player_armor_total() -> int:
 	for it in [equipped_armor, equipped_gloves, equipped_boots]:
 		if typeof(it) == TYPE_DICTIONARY and not (it as Dictionary).is_empty():
 			var t := String((it as Dictionary).get("armor_type", ""))
-			if t != "":
+			# Berserker nie daje bonusu setowego do armor — tylko flat dmg z bonuses.
+			if t != "" and t != "berserker":
 				types.append(t)
 	# set bonus: 2 same -> +1, 3 same -> +2
 	var bonus := 0
@@ -2654,7 +2669,10 @@ func _animate_class_change(class_key: String) -> void:
 	p.emitting = true
 	ring.emitting = true
 	get_tree().create_timer(0.08).timeout.connect(func():
-		if new_tex: player.texture = new_tex
+		if new_tex:
+			player.texture = new_tex
+		if inventory_screen and is_instance_valid(inventory_screen):
+			inventory_screen.refresh_run_portrait()
 	)
 	get_tree().create_timer(1.2).timeout.connect(func():
 		if is_instance_valid(p): p.queue_free()
@@ -3459,6 +3477,9 @@ func _gen_random_item(slot_key:String, rarity:int, diff:int) -> Dictionary:
 					rare_boost = 3
 			var armor_val: int = clamp(armor_base + rare_boost, 0, 15)
 			var at := _rand_armor_type()
+			# Berserker = tylko dmg (weapon_dmg w bonuses), bez wartości pancerza na kaflu.
+			if at == "berserker":
+				armor_val = 0
 			var item2: Dictionary = {
 				"type":"armor","name":item_name,"rarity":rarity,
 				"armor": armor_val,
@@ -3836,8 +3857,7 @@ func _apply_bonuses_dict(it: Dictionary, apply: bool) -> void:
 			"crit":
 				player.crit += delta
 			"weapon_dmg":
-				# flat bonus is applied in calc_player_weapon_damage via weapon["bonuses"]
-				# so nothing to do here (kept for future if we store it elsewhere)
+				# Flat damage from armor/gloves/boots (berserker pieces); applied in calc_player_weapon_damage.
 				pass
 			_:
 				pass
@@ -4600,7 +4620,7 @@ func _icon_path_for_item(it: Dictionary) -> String:
 			guess = String(it["form"]).to_lower()  # np. "sword", "axe", ...
 		else:
 			var n := String(it.get("name","")).to_lower()
-			var tokens := ["sword","axe","dagger","mace","spear","hammer","blade","saber","bow","crossbow"]
+			var tokens := ["crossbow","dagger","spear","hammer","mace","blade","saber","sword","axe","bow"]
 			for t in tokens:
 				if n.find(t) >= 0:
 					guess = t

@@ -10,23 +10,41 @@ var hp: int = 0
 var damage: int = 0
 
 var _spr: Sprite2D = null
+var _hit_flash_tween: Tween = null
+## Wartości ze sceny / edytora — nie wolno nadpisywać Vector2.ONE (sprite'y są zwykle pomniejszone).
+var _spr_rest_modulate: Color = Color.WHITE
+var _spr_rest_scale: Vector2 = Vector2.ONE
 
 func _ready() -> void:
 	# 1) jeśli masz dziecko o nazwie "Sprite":
 	if has_node("Sprite") and get_node("Sprite") is Sprite2D:
-		_spr = get_node("Sprite")
+		_spr = get_node("Sprite") as Sprite2D
 	else:
 		# 2) znajdź pierwsze dziecko typu Sprite2D
 		for c in get_children():
 			if c is Sprite2D:
 				_spr = c
 				break
+	if _spr:
+		_spr_rest_modulate = _spr.modulate
+		_spr_rest_scale = _spr.scale
+
+func _kill_hit_flash() -> void:
+	if _hit_flash_tween != null and is_instance_valid(_hit_flash_tween):
+		_hit_flash_tween.kill()
+	_hit_flash_tween = null
 
 func setup_enemy(name_in: String, hp_in: int, dmg_in: int, tex_path: String = "") -> void:
 	name_display = name_in
 	max_hp = hp_in
 	hp = max_hp
 	damage = dmg_in
+
+	_kill_hit_flash()
+	if _spr:
+		# Stan po poprzedniej walce / tweenie — z powrotem do rozmiaru koloru ze sceny.
+		_spr.modulate = _spr_rest_modulate
+		_spr.scale = _spr_rest_scale
 
 	# DEBUG: zobaczysz w Output, co trafia do wroga
 	print("Enemy setup:", name_display, " tex:", tex_path)
@@ -54,14 +72,19 @@ func is_alive() -> bool:
 func play_hit_flash() -> void:
 	if _spr == null:
 		return
-	var start_color := _spr.modulate
-	var start_scale := _spr.scale
-	var t := get_tree().create_tween()
-	t.tween_property(_spr, "modulate", Color(1, 0.3, 0.3, 1.0), 0.08).from(start_color)
-	t.parallel().tween_property(_spr, "scale", start_scale * Vector2(1.08, 0.92), 0.08).from(start_scale)
+	# Nakładające się tweeny (Quick Slash) — zabij poprzedni, snap do spoczynku ze sceny, potem jeden pełny flash.
+	_kill_hit_flash()
+	_spr.modulate = _spr_rest_modulate
+	_spr.scale = _spr_rest_scale
+	var flash_col := Color(1, 0.3, 0.3, _spr_rest_modulate.a)
+	var punch_scale := _spr_rest_scale * Vector2(1.08, 0.92)
+	_hit_flash_tween = create_tween()
+	var t := _hit_flash_tween
+	t.tween_property(_spr, "modulate", flash_col, 0.08)
+	t.parallel().tween_property(_spr, "scale", punch_scale, 0.08)
 	t.tween_interval(0.05)
-	t.tween_property(_spr, "modulate", start_color, 0.10)
-	t.parallel().tween_property(_spr, "scale", start_scale, 0.10)
+	t.tween_property(_spr, "modulate", _spr_rest_modulate, 0.10)
+	t.parallel().tween_property(_spr, "scale", _spr_rest_scale, 0.10)
 
 # ---------- POMOCNICZA ----------
 

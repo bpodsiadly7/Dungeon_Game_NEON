@@ -56,6 +56,11 @@ const ICON_BY_TYPE := {
 	"ring2":   "res://ikony/ring_icon.png",
 }
 
+## Substrings matched against item name for weapon icons — longest first so "crossbow" beats "bow".
+const WEAPON_ICON_NAME_KEYS := [
+	"crossbow", "dagger", "hammer", "spear", "blade", "saber", "mace", "sword", "axe", "bow",
+]
+
 const CLASS_TEX := {
 	"warrior":   "res://player_classes/dwarf_warrior.png",
 	"assassin":  "res://player_classes/dwarf_assasin.png",
@@ -106,6 +111,8 @@ var _drag_slot: String = ""
 var _drag_idx: int = -1
 var _drag_preview: PanelContainer = null
 var _drag_source: String = "" # "backpack" | "equipped"
+## Zwraca Texture2D gracza z aktywnego runa (tak samo jak widoczna postać). Jeśli Callable pusty / null — fallback z GameState.
+var _run_player_texture_supplier: Callable = Callable()
 
 func _ready() -> void:
 	if ResourceLoader.exists("res://MedievalSharp-Bold.ttf"):
@@ -279,9 +286,9 @@ func _build_center_panel(parent: HBoxContainer) -> void:
 	char_tex.offset_right  =  75
 	char_tex.offset_top    = -100
 	char_tex.offset_bottom =  100
-	_load_char_sprite(char_tex)
 	area.add_child(char_tex)
 	_char_sprite = char_tex
+	_sync_char_portrait()
 
 	for slot_key in SLOT_CONFIG:
 		var cfg: Dictionary = SLOT_CONFIG[slot_key]
@@ -409,6 +416,7 @@ func open(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
 	inventory    = inv
 	equipped     = eq
 	player_stats = stats
+	_sync_char_portrait()
 	_refresh_stats()
 	_refresh_all_slots()
 	_refresh_backpack()
@@ -452,7 +460,7 @@ func _calc_total_armor() -> int:
 		var it: Dictionary = equipped.get(k, {})
 		if not it.is_empty():
 			var t := String(it.get("armor_type", ""))
-			if t != "":
+			if t != "" and t != "berserker":
 				types.append(t)
 	var bonus := 0
 	if types.size() >= 2:
@@ -467,6 +475,17 @@ func _calc_total_armor() -> int:
 				bonus = max(bonus, 2)
 	return clamp(base + bonus, 0, 15)
 
+func _flat_weapon_dmg_from_armor_pieces() -> int:
+	var total := 0
+	for k in ["helmet", "armor", "gloves", "boots"]:
+		var it: Dictionary = equipped.get(k, {})
+		if it.is_empty():
+			continue
+		var b: Dictionary = it.get("bonuses", {})
+		total += int(b.get("weapon_dmg", 0))
+	return total
+
+
 func _calc_total_dmg() -> int:
 	var w: Dictionary = equipped.get("weapon", {})
 	if w.is_empty():
@@ -474,6 +493,7 @@ func _calc_total_dmg() -> int:
 	var base: int = int(w.get("base", 0))
 	var bdict: Dictionary = w.get("bonuses", {})
 	base += int(bdict.get("weapon_dmg", 0))
+	base += _flat_weapon_dmg_from_armor_pieces()
 	var sc: Dictionary = w.get("scale", {})
 	var mult := 1.0
 	mult += float(int(player_stats.get("str", 0))) * 0.08 * float(sc.get("str", 0.0))
@@ -903,11 +923,27 @@ func _slot_key_from_global_pos(global_pos: Vector2) -> String:
 			return slot_key
 	return ""
 
-func _load_char_sprite(tex_rect: TextureRect) -> void:
+func set_run_player_texture_supplier(supplier: Callable) -> void:
+	_run_player_texture_supplier = supplier
+
+func refresh_run_portrait() -> void:
+	_sync_char_portrait()
+
+func _sync_char_portrait() -> void:
+	if _char_sprite == null or not is_instance_valid(_char_sprite):
+		return
+	var tex: Texture2D = null
+	if _run_player_texture_supplier.is_valid():
+		var v: Variant = _run_player_texture_supplier.call()
+		if v is Texture2D:
+			tex = v as Texture2D
+	if tex != null:
+		_char_sprite.texture = tex
+		return
 	var cls: String = String(GameState.meta.get("chosen_class", ""))
 	var path: String = CLASS_TEX.get(cls, CLASS_TEX[""])
-	if ResourceLoader.exists(path):
-		tex_rect.texture = load(path)
+	if path != "" and ResourceLoader.exists(path):
+		_char_sprite.texture = load(path) as Texture2D
 
 func _resolve_icon(item: Dictionary) -> Texture2D:
 	var name_lower: String = str(item.get("name", "")).to_lower()
@@ -928,7 +964,9 @@ func _resolve_icon(item: Dictionary) -> Texture2D:
 		if ICON_BY_TYPE.has(key):
 			guess = key
 	if slot_key == "weapon":
-		for t in ICON_BY_TYPE.keys():
+		for t in WEAPON_ICON_NAME_KEYS:
+			if not ICON_BY_TYPE.has(t):
+				continue
 			if name_lower.find(t) >= 0:
 				guess = t
 				break
