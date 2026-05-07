@@ -590,6 +590,7 @@ func _ready() -> void:
 		inventory_screen.closed.connect(_on_inventory_closed)
 		inventory_screen.item_equipped.connect(_on_inventory_equip)
 		inventory_screen.item_dropped.connect(_on_inventory_drop)
+		inventory_screen.item_unequipped.connect(_on_inventory_unequip)
 		inventory_screen.stat_spent.connect(func(key: String):
 			if player.stat_points <= 0:
 				return
@@ -663,6 +664,29 @@ func _on_inventory_equip(slot_key: String, idx: int) -> void:
 func _on_inventory_drop(slot_key: String, idx: int) -> void:
 	# TODO: dodaj potwierdzenie drop
 	inventory[slot_key].remove_at(idx)
+	inventory_screen._refresh_backpack()
+
+func _on_inventory_unequip(slot_key: String) -> void:
+	_unequip_item(slot_key)
+	inventory_screen.equipped = {
+		"weapon":   weapon,
+		"armor":    equipped_armor,
+		"helmet":   equipped_helmet,
+		"necklace": equipped_necklace,
+		"gloves":   equipped_gloves,
+		"boots":    equipped_boots,
+		"ring1":    equipped_ring1,
+		"ring2":    equipped_ring2,
+	}
+	inventory_screen.player_stats["str"] = player.strength
+	inventory_screen.player_stats["agi"] = player.agility
+	inventory_screen.player_stats["vit"] = player.vitality
+	inventory_screen.player_stats["crit"] = player.crit
+	inventory_screen.player_stats["stat_points"] = player.stat_points
+	inventory_screen.player_stats["hp"] = player.hp
+	inventory_screen.player_stats["max_hp"] = player.max_hp
+	inventory_screen._refresh_stats()
+	inventory_screen._refresh_all_slots()
 	inventory_screen._refresh_backpack()
 
 
@@ -2669,6 +2693,57 @@ func _equip_item(key:String, idx:int) -> void:
 
 	# 2) nałóż bonus z nowo założonego itemu w tym slocie
 	_apply_stat_bonus_for_slot(key, true)
+
+	_update_labels()
+	_refresh_inventory_ui()
+
+func _unarmed_weapon() -> Dictionary:
+	return {
+		"type": "weapon",
+		"name": "Unarmed",
+		"base": 1,
+		"scale": {"str": 1.0, "agi": 0.0},
+		"bonus_stat": "",
+		"bonus_value": 0,
+		"rarity": 0
+	}
+
+func _unequip_item(key: String) -> void:
+	var it: Dictionary = _get_equipped_item_for_slot(key)
+	if it.is_empty():
+		return
+
+	# zdejmij bonusy ze statów
+	_apply_stat_bonus_for_slot(key, false)
+
+	# zdejmij hp_bonus z hełmu (to nie jest w bonus_stat/bonus_value)
+	if key == "helmet":
+		var old_hp: int = int(equipped_helmet.get("hp_bonus", 0))
+		if old_hp != 0:
+			player.max_hp = max(1, player.max_hp - old_hp)
+			player.hp = clamp(player.hp, 0, player.max_hp)
+			player.emit_signal("hp_changed", player.hp, player.max_hp)
+
+	# wyczyść slot
+	match key:
+		"weapon":
+			weapon = _unarmed_weapon()
+		"armor":
+			equipped_armor = {}
+		"helmet":
+			equipped_helmet = {}
+		"necklace":
+			equipped_necklace = {}
+		"gloves":
+			equipped_gloves = {}
+		"boots":
+			equipped_boots = {}
+		"ring1":
+			equipped_ring1 = {}
+		"ring2":
+			equipped_ring2 = {}
+		_:
+			pass
 
 	_update_labels()
 	_refresh_inventory_ui()

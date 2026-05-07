@@ -4,6 +4,7 @@ signal closed
 signal item_equipped(slot_key: String, idx: int)
 signal item_dropped(slot_key: String, idx: int)
 signal stat_spent(stat_key: String)
+signal item_unequipped(slot_key: String)
 signal item_hovered(item: Dictionary, slot_key: String, idx: int)
 
 const SLOT_CONFIG := {
@@ -71,6 +72,8 @@ var _item_stats:   RichTextLabel = null
 var _equip_btn:    Button = null
 var _drop_btn:     Button = null
 var _stats_labels: Dictionary = {}
+var _backpack_scroll: ScrollContainer = null
+var _char_sprite: TextureRect = null
 var _stats_plus_buttons: Dictionary = {}
 var _hovered_item: Dictionary = {}
 var _hovered_slot: String = ""
@@ -82,6 +85,7 @@ var _drag_item: Dictionary = {}
 var _drag_slot: String = ""
 var _drag_idx: int = -1
 var _drag_preview: PanelContainer = null
+var _drag_source: String = "" # "backpack" | "equipped"
 
 func _ready() -> void:
 	if ResourceLoader.exists("res://MedievalSharp-Bold.ttf"):
@@ -238,6 +242,7 @@ func _build_center_panel(parent: HBoxContainer) -> void:
 	char_tex.offset_bottom =  100
 	_load_char_sprite(char_tex)
 	area.add_child(char_tex)
+	_char_sprite = char_tex
 
 	for slot_key in SLOT_CONFIG:
 		var cfg: Dictionary = SLOT_CONFIG[slot_key]
@@ -300,17 +305,17 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 
 	vbox.add_child(_make_hsep())
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	vbox.add_child(scroll)
+	_backpack_scroll = ScrollContainer.new()
+	_backpack_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_backpack_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vbox.add_child(_backpack_scroll)
 
 	_item_grid = GridContainer.new()
 	_item_grid.columns = 6
 	_item_grid.add_theme_constant_override("h_separation", 8)
 	_item_grid.add_theme_constant_override("v_separation", 8)
 	_item_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(_item_grid)
+	_backpack_scroll.add_child(_item_grid)
 
 	vbox.add_child(_make_hsep())
 
@@ -401,12 +406,19 @@ func _refresh_all_slots() -> void:
 func _refresh_slot(slot_key: String) -> void:
 	var panel: PanelContainer = _slot_panels.get(slot_key)
 	if not panel: return
+	# Sloty nie mogą zmieniać rozmiaru (zawartość nie może ich "rozpychać")
+	panel.custom_minimum_size = SLOT_SIZE
+	panel.size = SLOT_SIZE
+	panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	for c in panel.get_children():
 		c.queue_free()
 	var item: Dictionary = equipped.get(slot_key, {})
 	var cfg: Dictionary  = SLOT_CONFIG.get(slot_key, {})
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 2)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	panel.add_child(vbox)
 
 	if item.is_empty():
@@ -424,14 +436,20 @@ func _refresh_slot(slot_key: String) -> void:
 		if tex:
 			var tr := TextureRect.new()
 			tr.texture = tex
-			tr.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-			tr.custom_minimum_size = Vector2(36, 36)
+			tr.custom_minimum_size = Vector2(46, 46)
 			tr.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			tr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			vbox.add_child(tr)
 		var name_lbl := _make_label(str(item.get("name", "?")), 9, col)
 		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		name_lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
+		name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		name_lbl.clip_text = true
+		name_lbl.custom_minimum_size = Vector2(SLOT_SIZE.x - 8.0, 0)
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		vbox.add_child(name_lbl)
 		if bool(item.get("permanent", false)):
 			var perm := _make_label("*", 11, Color(0.55, 0.90, 0.45))
@@ -457,6 +475,15 @@ func _refresh_slot(slot_key: String) -> void:
 					_show_item_details(selected_item, selected_slot, false, selected_idx)
 				else:
 					_clear_selection()
+		)
+		hover_btn.gui_input.connect(func(event: InputEvent):
+			if event is InputEventMouseButton:
+				var mb := event as InputEventMouseButton
+				if mb.button_index == MOUSE_BUTTON_LEFT:
+					if mb.pressed:
+						_start_drag_item(item, slot_key, -1, col, "equipped")
+					else:
+						_finish_drag_item()
 		)
 		panel.add_child(hover_btn)
 
@@ -504,10 +531,11 @@ func _refresh_backpack() -> void:
 		if tex:
 			var tr := TextureRect.new()
 			tr.texture = tex
-			tr.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			tr.custom_minimum_size = Vector2(36, 36)
 			tr.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			tr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			vbox.add_child(tr)
 
 		var full_name: String = str(item.get("name", "?"))
@@ -546,7 +574,7 @@ func _refresh_backpack() -> void:
 				var mb := event as InputEventMouseButton
 				if mb.button_index == MOUSE_BUTTON_LEFT:
 					if mb.pressed:
-						_start_drag_item(captured_item, captured_slot, captured_idx, col)
+						_start_drag_item(captured_item, captured_slot, captured_idx, col, "backpack")
 					else:
 						_finish_drag_item()
 		)
@@ -688,16 +716,17 @@ func _fmt_delta(delta: float, with_percent: bool) -> String:
 		col = "#E06C75"
 	return "[color=%s]%s[/color]" % [col, text]
 
-func _start_drag_item(item: Dictionary, slot_key: String, idx: int, border_col: Color) -> void:
+func _start_drag_item(item: Dictionary, slot_key: String, idx: int, border_col: Color, source: String) -> void:
 	_dragging = true
 	_drag_item = item.duplicate(true)
 	_drag_slot = slot_key
 	_drag_idx = idx
+	_drag_source = source
 	if _drag_preview and is_instance_valid(_drag_preview):
 		_drag_preview.queue_free()
 	_drag_preview = PanelContainer.new()
-	_drag_preview.custom_minimum_size = Vector2(90, 30)
-	_drag_preview.size = Vector2(90, 30)
+	_drag_preview.custom_minimum_size = Vector2(96, 34)
+	_drag_preview.size = Vector2(96, 34)
 	_drag_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_drag_preview.z_index = 999
 	_set_panel_border(_drag_preview, border_col)
@@ -716,12 +745,23 @@ func _start_drag_item(item: Dictionary, slot_key: String, idx: int, border_col: 
 func _finish_drag_item() -> void:
 	if not _dragging:
 		return
-	var target_slot := _slot_key_from_global_pos(get_global_mouse_position())
-	if target_slot != "" and target_slot == _drag_slot:
-		item_equipped.emit(_drag_slot, _drag_idx)
-		_clear_selection()
-		_refresh_all_slots()
-		_refresh_backpack()
+	var mouse := get_global_mouse_position()
+	var target_slot := _slot_key_from_global_pos(mouse)
+	if _drag_source == "backpack":
+		# Ułatwienie: drop na postaci = auto-equip do właściwego slota
+		if target_slot == "" and _is_over_character(mouse):
+			target_slot = _drag_slot
+		if target_slot != "" and target_slot == _drag_slot:
+			item_equipped.emit(_drag_slot, _drag_idx)
+			_clear_selection()
+			_refresh_all_slots()
+			_refresh_backpack()
+	elif _drag_source == "equipped":
+		if _backpack_scroll and _backpack_scroll.get_global_rect().has_point(mouse):
+			item_unequipped.emit(_drag_slot)
+			_clear_selection()
+			_refresh_all_slots()
+			_refresh_backpack()
 	if _drag_preview and is_instance_valid(_drag_preview):
 		_drag_preview.queue_free()
 	_drag_preview = null
@@ -729,6 +769,12 @@ func _finish_drag_item() -> void:
 	_drag_item = {}
 	_drag_slot = ""
 	_drag_idx = -1
+	_drag_source = ""
+
+func _is_over_character(global_pos: Vector2) -> bool:
+	if _char_sprite == null or not is_instance_valid(_char_sprite):
+		return false
+	return _char_sprite.get_global_rect().has_point(global_pos)
 
 func _slot_key_from_global_pos(global_pos: Vector2) -> String:
 	for slot_key in _slot_panels:
