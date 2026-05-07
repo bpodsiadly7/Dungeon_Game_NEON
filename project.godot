@@ -35,6 +35,10 @@ folder_colors={
 "res://skeletons/": "gray"
 }
 
+[gui]
+
+theme/custom_font="uid://c1k21tdit3e3h"
+
 [input]
 
 ui_home={

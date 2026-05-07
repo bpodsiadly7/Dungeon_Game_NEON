@@ -244,6 +244,25 @@ func _build_left_panel(parent: HBoxContainer) -> void:
 	hp_row.add_child(hp_val)
 	_stats_labels["hp"] = hp_val
 
+	vbox.add_child(_make_hsep())
+	var armor_row := HBoxContainer.new()
+	vbox.add_child(armor_row)
+	var armor_lbl := _make_label("Total Armor:", 15, Color(0.72, 0.70, 0.66))
+	armor_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	armor_row.add_child(armor_lbl)
+	var armor_val := _make_label("0", 15, Color(0.65, 0.85, 1.0))
+	armor_row.add_child(armor_val)
+	_stats_labels["total_armor"] = armor_val
+
+	var dmg_row := HBoxContainer.new()
+	vbox.add_child(dmg_row)
+	var dmg_lbl := _make_label("Total DMG:", 15, Color(0.72, 0.70, 0.66))
+	dmg_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	dmg_row.add_child(dmg_lbl)
+	var dmg_val := _make_label("0", 15, Color(1.0, 0.75, 0.35))
+	dmg_row.add_child(dmg_val)
+	_stats_labels["total_dmg"] = dmg_val
+
 func _build_center_panel(parent: HBoxContainer) -> void:
 	var area := Control.new()
 	area.custom_minimum_size = Vector2(400, 0)
@@ -412,12 +431,54 @@ func _refresh_stats() -> void:
 		var lbl: Label = _stats_labels[key]
 		if key == "hp":
 			lbl.text = "%d / %d" % [int(player_stats.get("hp", 0)), int(player_stats.get("max_hp", 0))]
+		elif key == "total_armor":
+			lbl.text = str(_calc_total_armor())
+		elif key == "total_dmg":
+			lbl.text = str(_calc_total_dmg())
 		else:
 			lbl.text = str(int(player_stats.get(key, 0)))
 	var has_points := int(player_stats.get("stat_points", 0)) > 0
 	for key in _stats_plus_buttons:
 		var btn: Button = _stats_plus_buttons[key]
 		btn.disabled = not has_points
+
+func _calc_total_armor() -> int:
+	var base := 0
+	var armor_item: Dictionary = equipped.get("armor", {})
+	if not armor_item.is_empty():
+		base = int(armor_item.get("armor", 0))
+	var types: Array[String] = []
+	for k in ["armor", "gloves", "boots"]:
+		var it: Dictionary = equipped.get(k, {})
+		if not it.is_empty():
+			var t := String(it.get("armor_type", ""))
+			if t != "":
+				types.append(t)
+	var bonus := 0
+	if types.size() >= 2:
+		var counts := {}
+		for t in types:
+			counts[t] = int(counts.get(t, 0)) + 1
+		for t in counts.keys():
+			var c := int(counts[t])
+			if c == 2:
+				bonus = max(bonus, 1)
+			elif c >= 3:
+				bonus = max(bonus, 2)
+	return clamp(base + bonus, 0, 15)
+
+func _calc_total_dmg() -> int:
+	var w: Dictionary = equipped.get("weapon", {})
+	if w.is_empty():
+		return 0
+	var base: int = int(w.get("base", 0))
+	var bdict: Dictionary = w.get("bonuses", {})
+	base += int(bdict.get("weapon_dmg", 0))
+	var sc: Dictionary = w.get("scale", {})
+	var mult := 1.0
+	mult += float(int(player_stats.get("str", 0))) * 0.08 * float(sc.get("str", 0.0))
+	mult += float(int(player_stats.get("agi", 0))) * 0.05 * float(sc.get("agi", 0.0))
+	return max(1, int(round(float(base) * mult)))
 
 func _refresh_all_slots() -> void:
 	for slot_key in _slot_panels:
