@@ -12,6 +12,8 @@ extends Node2D
 @onready var enemy_hp_bar: ProgressBar = $CanvasLayer/UIRoot/Right/EnemyHPBar
 @onready var xp_bar: ProgressBar = $CanvasLayer/UIRoot/Left/XPBar
 @onready var lbl_level: Label = $CanvasLayer/UIRoot/Left/LevelLabel
+var unspent_points_label: Label = null
+var _unspent_pulse_tween: Tween = null
 
 # --- Stats panel refs ---
 @onready var btn_stats: Button = $CanvasLayer/UIRoot/Left/StatsButton
@@ -611,6 +613,8 @@ func _ready() -> void:
 
 	# ... koniec _ready() 
 	print("[DEBUG] _ready() END")
+	_ensure_unspent_points_label()
+	_update_unspent_points_indicator(player.stat_points)
 
 func open_inventory() -> void:
 	if inventory_screen:
@@ -889,6 +893,7 @@ func _process(_d: float) -> void:
 		print("[DEBUG] Attack key pressed! turn=%s player_alive=%s enemy_alive=%s" % [turn, player.is_alive(), enemy.is_alive()])
 		if turn == Turn.PLAYER and player.is_alive() and enemy.is_alive():
 			_on_attack_pressed()
+	# unspent points indicator is positioned under dungeon label
 	_update_world_background_position()
 
 func _on_attack_pressed() -> void:
@@ -1405,7 +1410,7 @@ func _on_player_xp_changed(current_xp: int, xp_to_next: int) -> void:
 		var tween := get_tree().create_tween()
 		tween.tween_property(xp_bar,"value",clamp(current_xp, 0, xp_to_next),0.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
-func _on_player_level_changed(level: int, _stat_points: int) -> void:
+func _on_player_level_changed(level: int, stat_points_now: int) -> void:
 	if lbl_level:
 		lbl_level.text = "LVL %d" % level
 	if xp_bar:
@@ -1416,7 +1421,9 @@ func _on_player_level_changed(level: int, _stat_points: int) -> void:
 		t.tween_property(xp_bar, "modulate", original_modulate, 0.2)
 	if not has_evolved and level >= EVOLVE_LEVEL:
 		_show_evolution_choice()
-	_open_stats_panel_auto_on_level_up()
+	# Do not auto-open stats panel on level up.
+	# Player spends points from Inventory; we only nudge via the unspent indicator.
+	_update_unspent_points_indicator(stat_points_now)
 
 func _play_d20_animation(final_roll: int) -> void:
 	if not dice_display or not dice_roller:
@@ -1881,6 +1888,55 @@ func _on_player_stats_changed(strn:int, agi:int, vit:int, crit:int, points:int) 
 		if turn == Turn.PLAYER and btn_attack:
 			btn_attack.disabled = false
 	_update_labels()
+	_update_unspent_points_indicator(points)
+
+func _ensure_unspent_points_label() -> void:
+	if unspent_points_label and is_instance_valid(unspent_points_label):
+		return
+	unspent_points_label = Label.new()
+	unspent_points_label.name = "UnspentPointsLabel"
+	unspent_points_label.visible = false
+	unspent_points_label.z_index = 1000
+	unspent_points_label.add_theme_font_size_override("font_size", 22)
+	unspent_points_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.30))
+	unspent_points_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	unspent_points_label.add_theme_constant_override("outline_size", 4)
+	if DMG_FONT:
+		unspent_points_label.add_theme_font_override("font", DMG_FONT)
+	unspent_points_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	unspent_points_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	unspent_points_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	unspent_points_label.size = Vector2(420, 30)
+	if $CanvasLayer:
+		$CanvasLayer.add_child(unspent_points_label)
+	else:
+		add_child(unspent_points_label)
+
+func _update_unspent_points_indicator(points: int) -> void:
+	_ensure_unspent_points_label()
+	if points <= 0:
+		if _unspent_pulse_tween and is_instance_valid(_unspent_pulse_tween):
+			_unspent_pulse_tween.kill()
+		_unspent_pulse_tween = null
+		unspent_points_label.visible = false
+		return
+	unspent_points_label.text = "Unspent points: %d" % points
+	unspent_points_label.visible = true
+	# place it under "Current dungeon"
+	if lbl_dungeon_name and is_instance_valid(lbl_dungeon_name):
+		unspent_points_label.position = lbl_dungeon_name.position + Vector2(0, lbl_dungeon_name.size.y - 6)
+	else:
+		unspent_points_label.position = Vector2(get_viewport_rect().size.x / 2 - 210, 44)
+	# (Re)start a gentle pulse
+	if _unspent_pulse_tween == null or not is_instance_valid(_unspent_pulse_tween):
+		unspent_points_label.modulate = Color(1, 1, 1, 0.85)
+		unspent_points_label.scale = Vector2.ONE
+		_unspent_pulse_tween = get_tree().create_tween()
+		_unspent_pulse_tween.set_loops()
+		_unspent_pulse_tween.tween_property(unspent_points_label, "scale", Vector2(1.08, 1.08), 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		_unspent_pulse_tween.parallel().tween_property(unspent_points_label, "modulate:a", 1.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		_unspent_pulse_tween.tween_property(unspent_points_label, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		_unspent_pulse_tween.parallel().tween_property(unspent_points_label, "modulate:a", 0.75, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 func _open_stats_panel_auto_on_level_up() -> void:
 	if not stats_panel: return
@@ -4875,7 +4931,7 @@ func _dev_spawn_boss() -> void:
 
 func _dev_trigger_shrine() -> void:
 	if _shrine_in_progress or _shrine_dialog_open:
-		_show_toast("Shrine już trwa!", 1.0)
+		_show_toast("Shrine is already running!", 1.0)
 		return
 	_dev_toggle_panel()
 	_request_spawn({"name": "Sacred Shrine", "hp": 0, "damage": 0, "difficulty": 0, "shrine": true})
@@ -4888,7 +4944,7 @@ func _dev_full_heal() -> void:
 	player.hp = player.max_hp
 	player.emit_signal("hp_changed", player.hp, player.max_hp)
 	show_damage_popup(player, "FULL HEAL", "heal")
-	_show_toast("Gracz uleczony!", 1.0)
+	_show_toast("Dwarf healed!", 1.0)
 
 func _dev_add_level() -> void:
 	_dev_add_levels(1)
@@ -4896,12 +4952,12 @@ func _dev_add_level() -> void:
 func _dev_add_levels(count: int) -> void:
 	for i in range(count):
 		player.add_xp(player.xp_to_next - player.xp)
-	_show_toast("+%d poziom(ów)! Teraz LVL %d" % [count, player.level], 1.5)
+	_show_toast("+%d level(s)! Now LVL %d" % [count, player.level], 1.5)
 
 func _dev_set_forced_rarity(r: int, btn: Button) -> void:
 	_dev_forced_rarity = r
 	var names := {-1: "OFF", 0: "Common", 1: "Rare", 2: "Epic", 3: "Legendary"}
-	_show_toast("Wymuszony drop: %s" % names.get(r, "?"), 1.2)
+	_show_toast("Forced drop: %s" % names.get(r, "?"), 1.2)
 
 func _dev_goto_dungeon(idx: int) -> void:
 	_dev_toggle_panel()
