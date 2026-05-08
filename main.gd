@@ -10,6 +10,13 @@ extends Node2D
 @onready var fx_root: Control = $CanvasLayer/UIRoot/FXRoot
 @onready var player_hp_bar: ProgressBar = $CanvasLayer/UIRoot/Left/PlayerHPBar
 @onready var enemy_hp_bar: ProgressBar = $CanvasLayer/UIRoot/Right/EnemyHPBar
+@onready var lbl_player_hp_value: Label = get_node_or_null("CanvasLayer/UIRoot/Left/PlayerHPValue")
+@onready var lbl_player_armor_value: Label = get_node_or_null("CanvasLayer/UIRoot/Left/PlayerArmorValue")
+@onready var lbl_player_dmg_value: Label = get_node_or_null("CanvasLayer/UIRoot/Left/PlayerDmgValue")
+@onready var lbl_enemy_hp_value: Label = get_node_or_null("CanvasLayer/UIRoot/Right/EnemyHPValue")
+@onready var lbl_enemy_name: Label = get_node_or_null("CanvasLayer/UIRoot/Right/EnemyNameLabel")
+@onready var lbl_enemy_armor_value: Label = get_node_or_null("CanvasLayer/UIRoot/Right/EnemyArmorValue")
+@onready var lbl_enemy_dmg_value: Label = get_node_or_null("CanvasLayer/UIRoot/Right/EnemyDmgValue")
 @onready var xp_bar: ProgressBar = $CanvasLayer/UIRoot/Left/XPBar
 @onready var lbl_level: Label = $CanvasLayer/UIRoot/Left/LevelLabel
 var unspent_points_label: Label = null
@@ -1181,9 +1188,16 @@ func _on_player_hp_changed(cur:int, maxv:int) -> void:
 		player_hp_bar.max_value = maxv
 		player_hp_bar.value = cur
 	var a := _calc_player_armor_total()
-	lbl_player.text = "Player HP: %d / %d\nWeapon: %s (DMG: %d)\nArmor: %d" % [
-		cur, maxv, weapon["name"], calc_player_weapon_damage(), a
-	]
+	var dmg: int = calc_player_weapon_damage()
+	if lbl_player_hp_value:
+		lbl_player_hp_value.text = "%d/%d" % [cur, maxv]
+	if lbl_player_armor_value:
+		lbl_player_armor_value.text = str(a)
+	if lbl_player_dmg_value:
+		lbl_player_dmg_value.text = str(dmg)
+	# legacy corner label: keep empty for new HUD
+	if lbl_player:
+		lbl_player.text = ""
 	_update_potions_ui()
 
 func _calc_player_armor_total() -> int:
@@ -1216,7 +1230,17 @@ func _on_enemy_hp_changed(cur:int, maxv:int) -> void:
 		enemy_hp_bar.max_value = maxv
 		enemy_hp_bar.value = cur
 	var a = clamp(int(current_enemy_data.get("armor", 0)), 0, 15)
-	lbl_enemy.text = "%s\nHP: %d / %d\nDMG: %d\nArmor: %d" % [enemy.name_display, cur, maxv, enemy.damage, a]
+	if lbl_enemy_hp_value:
+		lbl_enemy_hp_value.text = "%d/%d" % [cur, maxv]
+	if lbl_enemy_name:
+		lbl_enemy_name.text = str(enemy.name_display)
+	if lbl_enemy_armor_value:
+		lbl_enemy_armor_value.text = str(a)
+	if lbl_enemy_dmg_value:
+		lbl_enemy_dmg_value.text = str(int(enemy.damage))
+	# legacy corner label: keep empty for new HUD
+	if lbl_enemy:
+		lbl_enemy.text = ""
 
 func _on_enemy_defeated() -> void:
 	var last_enemy: Dictionary = {}
@@ -1467,7 +1491,15 @@ func _on_player_damaged(amount:int) -> void:
 # 	shake_camera(5.0, 0.12)
 
 func _on_player_died() -> void:
-	lbl_player.text = "☠ Player DEAD ☠\nEnemies defeated: %d" % enemies_defeated
+	# New HUD: keep corners empty; show death via log/other UI later.
+	if lbl_player:
+		lbl_player.text = ""
+	if lbl_player_hp_value:
+		lbl_player_hp_value.text = "0"
+	if lbl_player_dmg_value:
+		lbl_player_dmg_value.text = "0"
+	if lbl_player_armor_value:
+		lbl_player_armor_value.text = str(_calc_player_armor_total())
 	lbl_log.text = "Game Over."
 	if btn_attack:
 		btn_attack.disabled = true
