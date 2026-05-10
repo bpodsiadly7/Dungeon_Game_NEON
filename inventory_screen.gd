@@ -78,6 +78,10 @@ const RARITY_COLORS := [
 ]
 const RARITY_NAMES := ["Common", "Rare", "Epic", "Legend", "Unique"]
 
+# Muszą być identyczne z main.gd (calc_player_weapon_damage / _calc_player_armor_total).
+const STR_DMG_PER_POINT := 0.04
+const AGI_DMG_PER_POINT := 0.03
+
 var _font: FontFile = null
 var inventory: Dictionary = {}
 var equipped:  Dictionary = {}
@@ -473,7 +477,8 @@ func _calc_total_armor() -> int:
 				bonus = max(bonus, 1)
 			elif c >= 3:
 				bonus = max(bonus, 2)
-	return clamp(base + bonus, 0, 15)
+	var extra_armor := int(player_stats.get("passive_armor_bonus", 0))
+	return clamp(base + bonus + extra_armor, 0, 15)
 
 func _flat_weapon_dmg_from_armor_pieces() -> int:
 	var total := 0
@@ -496,8 +501,10 @@ func _calc_total_dmg() -> int:
 	base += _flat_weapon_dmg_from_armor_pieces()
 	var sc: Dictionary = w.get("scale", {})
 	var mult := 1.0
-	mult += float(int(player_stats.get("str", 0))) * 0.08 * float(sc.get("str", 0.0))
-	mult += float(int(player_stats.get("agi", 0))) * 0.05 * float(sc.get("agi", 0.0))
+	mult += float(int(player_stats.get("str", 0))) * STR_DMG_PER_POINT * float(sc.get("str", 0.0))
+	mult += float(int(player_stats.get("agi", 0))) * AGI_DMG_PER_POINT * float(sc.get("agi", 0.0))
+	if String(player_stats.get("chosen_class", "")) == "warrior":
+		mult *= 1.10
 	return max(1, int(round(float(base) * mult)))
 
 func _refresh_all_slots() -> void:

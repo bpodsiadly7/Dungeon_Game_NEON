@@ -172,9 +172,12 @@ func _refresh_chest() -> void:
 
 	var chest: Dictionary = GameState.meta.get("permanent_chest", {})
 	var any := false
-	var rarity_colors := [Color(1,1,1), Color(0.45,0.75,1), Color(0.75,0.55,0.95), Color(1.0,0.85,0.2)]
+	var rarity_colors := [
+		Color(1, 1, 1), Color(0.45, 0.75, 1), Color(0.75, 0.55, 0.95),
+		Color(1.0, 0.85, 0.2), Color(0.30, 1.00, 0.85),
+	]
 
-	for slot_key in ["weapon", "armor", "helmet", "necklace"]:
+	for slot_key in GameState.EQUIPMENT_SLOT_KEYS:
 		var arr: Array = chest.get(slot_key, [])
 		for item in arr:
 			any = true
@@ -182,7 +185,7 @@ func _refresh_chest() -> void:
 			row.add_theme_constant_override("separation", 10)
 			row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-			var r: int = clamp(int(item.get("rarity", 0)), 0, 3)
+			var r: int = clamp(int(item.get("rarity", 0)), 0, rarity_colors.size() - 1)
 			var name_lbl := _make_label(
 				"%s  (%s)" % [str(item.get("name","?")), slot_key.capitalize()],
 				15, rarity_colors[r]
@@ -211,8 +214,7 @@ func _take_from_chest(slot_key: String, item: Dictionary) -> void:
 		if arr[j].get("name","") == item.get("name",""):
 			arr.remove_at(j)
 			break
-	if not GameState.run["loadout"].has(slot_key):
-		GameState.run["loadout"][slot_key] = []
+	GameState.ensure_save_equipment_shape()
 	var copy := item.duplicate(true)
 	copy["permanent"] = true
 	GameState.run["loadout"][slot_key].append(copy)

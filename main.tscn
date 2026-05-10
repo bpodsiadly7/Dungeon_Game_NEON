@@ -192,8 +192,10 @@ scale = Vector2(0.05, 0.05)
 layout_mode = 2
 size_flags_horizontal = 3
 texture = ExtResource("6_7mycd")
+expand_mode = 4
 
 [node name="PotionLabel" type="Label" parent="CanvasLayer/UIRoot/Left/PotionsUI"]
+visible = false
 layout_mode = 2
 theme_override_fonts/font = ExtResource("5_lquwl")
 theme_override_font_sizes/font_size = 636
@@ -304,7 +306,6 @@ grow_vertical = 0
 tooltip_text = "Zadaj atak ("
 
 [node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UIRoot/Bottom"]
-visible = false
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -312,11 +313,8 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="AttackButton" type="Button" parent="CanvasLayer/UIRoot/Bottom/HBoxContainer"]
-layout_mode = 2
-text = "Attack"
-
 [node name="CombatLog" type="Label" parent="CanvasLayer/UIRoot/Bottom/HBoxContainer"]
+visible = false
 custom_minimum_size = Vector2(300, 60)
 layout_mode = 2
 size_flags_horizontal = 3

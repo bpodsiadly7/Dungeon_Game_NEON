@@ -1,11 +1,41 @@
 # res://GameState.gd
 extends Node
 
+## Wszystkie sloty ekwipunku (zg. z inventory_screen / main). Stare zapisy dostają brakujące klucze przy loadzie.
+const EQUIPMENT_SLOT_KEYS: Array[String] = [
+	"weapon", "armor", "helmet", "necklace", "gloves", "boots", "ring1", "ring2"
+]
+
+func _empty_equipment_buckets() -> Dictionary:
+	var d := {}
+	for k in EQUIPMENT_SLOT_KEYS:
+		d[k] = []
+	return d
+
+func _ensure_equipment_dict_shape(d: Dictionary) -> void:
+	for k in EQUIPMENT_SLOT_KEYS:
+		if not d.has(k):
+			d[k] = []
+		elif typeof(d[k]) != TYPE_ARRAY:
+			d[k] = []
+
+func ensure_save_equipment_shape() -> void:
+	_ensure_save_equipment_shape()
+
+func _ensure_save_equipment_shape() -> void:
+	_ensure_equipment_dict_shape(meta["permanent_chest"])
+	if run.has("inventory"):
+		_ensure_equipment_dict_shape(run["inventory"])
+	else:
+		run["inventory"] = _empty_equipment_buckets()
+	if run.has("loadout"):
+		_ensure_equipment_dict_shape(run["loadout"])
+	else:
+		run["loadout"] = _empty_equipment_buckets()
+
 # ====== META (trwałe między runami) ======
 var meta := {
-	"permanent_chest": {
-		"weapon": [], "armor": [], "helmet": [], "necklace": []
-	},
+	"permanent_chest": {},
 	"gold": 0,
 	"unlocked_dungeons": ["Goblin Cave"],
 	"last_class": "",
@@ -18,50 +48,54 @@ var meta := {
 var run := {
 	"active": false,
 	"dungeon": "",
-	# Loot zebrany podczas runa — przepada przy śmierci i po powrocie
-	"inventory": {
-		"weapon": [], "armor": [], "helmet": [], "necklace": []
-	},
-	# Itemy świadomie zabrane z domu — przepadają przy śmierci, wracają do skrzynki po powrocie
-	"loadout": {
-		"weapon": [], "armor": [], "helmet": [], "necklace": []
-	}
+	"inventory": {},
+	"loadout": {}
 }
 
 static func _deep_copy(v):
 	return JSON.parse_string(JSON.stringify(v))
 
-# Gracz wybiera w domu co bierze — kopiujemy do run["loadout"]
+func _enter_tree() -> void:
+	_ensure_save_equipment_shape()
+
+# Gracz wybiera w domu co bierze — kopiujemy do run["loadout"] (wszystkie sloty)
 func pack_loadout(selected: Dictionary) -> void:
-	run["loadout"] = _deep_copy(selected)
+	var merged := _empty_equipment_buckets()
+	for k in EQUIPMENT_SLOT_KEYS:
+		if selected.has(k) and typeof(selected[k]) == TYPE_ARRAY:
+			merged[k] = _deep_copy(selected[k])
+	run["loadout"] = merged
 
 # Start runa — czyści run-inventory, loadout już ustawiony przez pack_loadout
 func start_run(dungeon_name: String) -> void:
 	run["active"] = true
 	run["dungeon"] = dungeon_name
-	run["inventory"] = {"weapon": [], "armor": [], "helmet": [], "necklace": []}
+	run["inventory"] = _empty_equipment_buckets()
 
 # Powrót do domu — loadout wraca do skrzynki, loot przepada
 func end_run_to_home() -> void:
-	for slot in run["loadout"]:
-		for it in run["loadout"][slot]:
+	_ensure_save_equipment_shape()
+	for slot in EQUIPMENT_SLOT_KEYS:
+		var bucket: Array = run["loadout"].get(slot, [])
+		for it in bucket:
 			meta["permanent_chest"][slot].append(_deep_copy(it))
 	run["active"] = false
 	run["dungeon"] = ""
-	run["inventory"] = {"weapon": [], "armor": [], "helmet": [], "necklace": []}
-	run["loadout"]   = {"weapon": [], "armor": [], "helmet": [], "necklace": []}
+	run["inventory"] = _empty_equipment_buckets()
+	run["loadout"] = _empty_equipment_buckets()
 
 # Śmierć — traci wszystko: i loot, i loadout
 func on_player_death() -> void:
-	run["active"]    = false
-	run["inventory"] = {"weapon": [], "armor": [], "helmet": [], "necklace": []}
-	run["loadout"]   = {"weapon": [], "armor": [], "helmet": [], "necklace": []}
+	run["active"] = false
+	run["inventory"] = _empty_equipment_buckets()
+	run["loadout"] = _empty_equipment_buckets()
 	# Reset poziomu gracza
 	meta["player"] = {
 		"level": 1, "xp": 0,
 		"strength": 1, "agility": 1, "vitality": 0, "crit": 0,
 		"stat_points": 0, "max_hp": 100, "hp": 100,
-		"has_evolved": false, "chosen_class": ""
+		"has_evolved": false, "chosen_class": "",
+		"stats_base_only": true,
 	}
 	# Klasa zostaje permanentna w meta
 	meta["chosen_class"] = meta.get("chosen_class", "")
@@ -111,7 +145,8 @@ func load_game(slot: int) -> bool:
 	f.close()
 	if typeof(data) != TYPE_DICTIONARY: return false
 	if data.has("meta"): meta = data["meta"]
-	if data.has("run"):  run  = data["run"]
+	if data.has("run"): run = data["run"]
+	_ensure_save_equipment_shape()
 	print("[SAVE] Loaded from slot %d" % slot)
 	return true
 
@@ -132,7 +167,7 @@ var current_slot: int = 1  # aktualnie wybrany slot
 
 func reset_meta() -> void:
 	meta = {
-		"permanent_chest": {"weapon": [], "armor": [], "helmet": [], "necklace": []},
+		"permanent_chest": _empty_equipment_buckets(),
 		"gold": 0,
 		"unlocked_dungeons": ["Goblin Cave"],
 		"last_class": "",
@@ -143,8 +178,8 @@ func reset_meta() -> void:
 	run = {
 		"active": false,
 		"dungeon": "",
-		"inventory": {"weapon": [], "armor": [], "helmet": [], "necklace": []},
-		"loadout":   {"weapon": [], "armor": [], "helmet": [], "necklace": []}
+		"inventory": _empty_equipment_buckets(),
+		"loadout": _empty_equipment_buckets()
 	}
 func save_player(p: Node, evolved: bool, cls: String) -> void:
 	meta["player"] = {
@@ -158,7 +193,10 @@ func save_player(p: Node, evolved: bool, cls: String) -> void:
 		"max_hp":       p.max_hp,
 		"hp":           p.hp,
 		"has_evolved":  evolved,
-		"chosen_class": cls
+		"chosen_class": cls,
+		## Gracz: strength/agi/vit/crit w save = TYLKO baza (bez bonusów z przedmiotów).
+		## Ekwipunek zmienia walkę/UI przez osobne obliczenia w main.gd.
+		"stats_base_only": true,
 	}
 
 func load_player(p: Node) -> Dictionary:
