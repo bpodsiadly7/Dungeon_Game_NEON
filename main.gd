@@ -788,9 +788,38 @@ func _apply_global_font() -> void:
 	# Opcjonalnie: ustaw wielkości bazowe
 	theme.default_font_size = 18
 
+	# Tooltipy: czytelniejsze (większa czcionka + ciemne tło)
+	theme.set_font_size("font_size", "TooltipLabel", 22)
+	theme.set_color("font_color", "TooltipLabel", Color(0.95, 0.95, 0.97, 1.0))
+	theme.set_color("font_outline_color", "TooltipLabel", Color(0, 0, 0, 1.0))
+	theme.set_constant("outline_size", "TooltipLabel", 6)
+	var tip_panel := StyleBoxFlat.new()
+	tip_panel.bg_color = Color(0.05, 0.06, 0.08, 0.96)
+	tip_panel.border_color = Color(0.85, 0.75, 0.30, 0.95)
+	tip_panel.border_width_left = 2
+	tip_panel.border_width_top = 2
+	tip_panel.border_width_right = 2
+	tip_panel.border_width_bottom = 2
+	tip_panel.corner_radius_top_left = 10
+	tip_panel.corner_radius_top_right = 10
+	tip_panel.corner_radius_bottom_left = 10
+	tip_panel.corner_radius_bottom_right = 10
+	tip_panel.shadow_size = 8
+	tip_panel.shadow_color = Color(0, 0, 0, 0.45)
+	tip_panel.shadow_offset = Vector2(0, 2)
+	theme.set_stylebox("panel", "TooltipPanel", tip_panel)
+	theme.set_constant("margin_left", "TooltipPanel", 10)
+	theme.set_constant("margin_top", "TooltipPanel", 8)
+	theme.set_constant("margin_right", "TooltipPanel", 10)
+	theme.set_constant("margin_bottom", "TooltipPanel", 8)
+
 	# Zastosuj do całego drzewa UI pod CanvasLayer
 	var root_canvas := $CanvasLayer
 	if root_canvas:
+		# Podpinamy theme do korzenia UI, żeby tooltips też go używały
+		var ui_root := get_node_or_null("CanvasLayer/UIRoot") as Control
+		if ui_root:
+			ui_root.theme = theme
 		for node in root_canvas.find_children("*", "Control", true, false):
 			if node is Control:
 				node.add_theme_font_override("font", font_res)
@@ -3521,21 +3550,25 @@ func _wire_modular_skills_ui() -> void:
 		return
 	skill_bar_buttons.clear()
 	passive_skill_slots.clear()
-	for slot in range(1, 9):
+	# Sloty aktywne są dynamiczne (np. 6): wykrywamy sekwencję SkillSlot1..N.
+	# Jeśli brakuje któregoś numeru po środku — zatrzymujemy, żeby nie robić dziur w indeksach slotów.
+	for slot in range(1, 33):
 		var b := grid.get_node_or_null("SkillSlot%d" % slot) as Button
 		if b == null:
-			push_error("main.tscn: brak SkillSlot%d w ActiveSkillsGrid." % slot)
-			continue
+			break
 		b.focus_mode = Control.FOCUS_NONE
 		b.pressed.connect(_on_skill_bar_slot_pressed.bind(slot))
 		skill_bar_buttons.append(b)
 	if pgrid:
-		for pi in range(1, 9):
+		# Sloty pasywne też są dynamiczne (np. 4)
+		for pi in range(1, 33):
 			var tr := pgrid.get_node_or_null("PassiveSlot%d" % pi) as TextureRect
-			if tr:
-				tr.mouse_filter = Control.MOUSE_FILTER_STOP
-				passive_skill_slots.append(tr)
-	skills_hotbar_wired = (skill_bar_buttons.size() == 8)
+			if tr == null:
+				break
+			tr.mouse_filter = Control.MOUSE_FILTER_STOP
+			passive_skill_slots.append(tr)
+
+	skills_hotbar_wired = (skill_bar_buttons.size() > 0)
 
 
 func _create_skills_ui() -> void:
@@ -3571,9 +3604,9 @@ func _update_passive_skills_ui() -> void:
 
 
 func _update_skills_ui() -> void:
-	if not skills_hotbar_wired or skill_bar_buttons.size() != 8:
+	if not skills_hotbar_wired or skill_bar_buttons.is_empty():
 		return
-	for idx in range(8):
+	for idx in range(skill_bar_buttons.size()):
 		var slot: int = idx + 1
 		var btn: Button = skill_bar_buttons[idx]
 		if btn == null or not is_instance_valid(btn):
