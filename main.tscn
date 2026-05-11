@@ -1,4 +1,4 @@
-[gd_scene load_steps=16 format=3 uid="uid://di8s4oahhme5"]
+[gd_scene load_steps=18 format=3 uid="uid://di8s4oahhme5"]
 
 [ext_resource type="Script" uid="uid://bednyshjiftkh" path="res://main.gd" id="1_1bvp3"]
 [ext_resource type="Texture2D" uid="uid://b843slb3i1pcu" path="res://player_classes/dwarf_novice.png" id="2_7mycd"]
@@ -10,6 +10,8 @@
 [ext_resource type="PackedScene" uid="uid://cnlssqpge8erk" path="res://addons/dice_roller/dice_roller/dice_roller.tscn" id="7_kek77"]
 [ext_resource type="Script" uid="uid://cohd4ovwrydr0" path="res://addons/dice_roller/dice_def.gd" id="8_4c57u"]
 [ext_resource type="Script" uid="uid://xsgh2gwr4gub" path="res://addons/dice_roller/dice_shape.gd" id="9_efxa6"]
+[ext_resource type="Texture2D" uid="uid://ccfph4n34lgh2" path="res://ikony/sword_icon.png" id="11_sword"]
+[ext_resource type="Texture2D" uid="uid://pa510soouvt5" path="res://ikony/ring_icon.png" id="12_ring"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_lquwl"]
 bg_color = Color(0.8985114, 0, 0.2924933, 1)
@@ -182,6 +184,7 @@ theme_override_fonts/font = ExtResource("5_lquwl")
 text = "Stats"
 
 [node name="PotionsUI" type="HBoxContainer" parent="CanvasLayer/UIRoot/Left"]
+visible = false
 layout_mode = 1
 offset_top = 75.0
 offset_right = 2240.0
@@ -189,6 +192,7 @@ offset_bottom = 1099.0
 scale = Vector2(0.05, 0.05)
 
 [node name="PotionIcon" type="TextureRect" parent="CanvasLayer/UIRoot/Left/PotionsUI"]
+visible = false
 layout_mode = 2
 size_flags_horizontal = 3
 texture = ExtResource("6_7mycd")
@@ -320,6 +324,159 @@ layout_mode = 2
 size_flags_horizontal = 3
 autowrap_mode = 3
 
+[node name="PanelPotion" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 194.0
+offset_top = 563.0
+offset_right = 254.0
+offset_bottom = 663.0
+mouse_filter = 2
+
+[node name="BtnPotion" type="TextureButton" parent="CanvasLayer/UIRoot/PanelPotion"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -47.46
+offset_top = -16.999973
+offset_right = 148.54001
+offset_bottom = 139.00003
+grow_horizontal = 2
+grow_vertical = 2
+scale = Vector2(0.6, 0.6)
+focus_mode = 0
+texture_normal = ExtResource("6_7mycd")
+stretch_mode = 5
+
+[node name="PanelAttack" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 1000.0
+offset_top = 600.0
+offset_right = 1100.0002
+offset_bottom = 700.0
+mouse_filter = 2
+
+[node name="BtnAttack" type="TextureButton" parent="CanvasLayer/UIRoot/PanelAttack"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+focus_mode = 0
+texture_normal = ExtResource("11_sword")
+stretch_mode = 5
+
+[node name="PanelActiveSkills" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 294.27
+offset_top = 640.0
+offset_right = 742.2687
+offset_bottom = 704.0
+mouse_filter = 2
+
+[node name="ActiveSkillsGrid" type="GridContainer" parent="CanvasLayer/UIRoot/PanelActiveSkills"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/h_separation = 6
+theme_override_constants/v_separation = 6
+columns = 8
+
+[node name="SkillSlot1" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
+[node name="SkillSlot2" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
+[node name="SkillSlot3" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
+[node name="SkillSlot4" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
+[node name="SkillSlot5" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
+[node name="SkillSlot6" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
+[node name="PanelPassiveSkills" type="Control" parent="CanvasLayer/UIRoot"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 740.0
+offset_top = 640.0
+offset_right = 939.0001
+offset_bottom = 699.99994
+mouse_filter = 2
+
+[node name="PassiveSkillsGrid" type="GridContainer" parent="CanvasLayer/UIRoot/PanelPassiveSkills"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
+columns = 8
+
+[node name="PassiveSlot1" type="TextureRect" parent="CanvasLayer/UIRoot/PanelPassiveSkills/PassiveSkillsGrid"]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+mouse_filter = 0
+texture = ExtResource("12_ring")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="PassiveSlot2" type="TextureRect" parent="CanvasLayer/UIRoot/PanelPassiveSkills/PassiveSkillsGrid"]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+mouse_filter = 0
+texture = ExtResource("12_ring")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="PassiveSlot3" type="TextureRect" parent="CanvasLayer/UIRoot/PanelPassiveSkills/PassiveSkillsGrid"]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+mouse_filter = 0
+texture = ExtResource("12_ring")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="PassiveSlot4" type="TextureRect" parent="CanvasLayer/UIRoot/PanelPassiveSkills/PassiveSkillsGrid"]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+mouse_filter = 0
+texture = ExtResource("12_ring")
+expand_mode = 1
+stretch_mode = 5
+
 [node name="NextEnemyDialog" type="AcceptDialog" parent="CanvasLayer/UIRoot"]
 disable_3d = true
 oversampling_override = 1.0
@@ -329,6 +486,7 @@ initial_position = 1
 ok_button_text = "OK"
 
 [node name="FXRoot" type="Control" parent="CanvasLayer/UIRoot"]
+visible = false
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0

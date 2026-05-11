@@ -3,7 +3,7 @@ extends Node2D
 # --- UI odwołania ---
 @onready var lbl_player   := $CanvasLayer/UIRoot/Left/LabelPlayer
 @onready var lbl_enemy    := $CanvasLayer/UIRoot/Right/LabelEnemy
-@onready var btn_attack   := $CanvasLayer/UIRoot/Bottom/HBoxContainer/AttackButton
+@onready var btn_attack: BaseButton = get_node_or_null("CanvasLayer/UIRoot/PanelAttack/BtnAttack") as BaseButton
 @onready var lbl_log      := $CanvasLayer/UIRoot/Bottom/HBoxContainer/CombatLog
 @onready var next_dialog: AcceptDialog = get_node_or_null("CanvasLayer/UIRoot/NextEnemyDialog")
 @onready var cam: Camera2D = $Camera2D
@@ -50,10 +50,9 @@ var is_in_home: bool = false
 
 
 # --- Potions UI ---
-@onready var potions_ui: HBoxContainer = $CanvasLayer/UIRoot/Left/PotionsUI
 @onready var potion_icon: TextureRect = $CanvasLayer/UIRoot/Left/PotionsUI/PotionIcon
 @onready var potion_label: Label = $CanvasLayer/UIRoot/Left/PotionsUI/PotionLabel
-@onready var btn_use_potion: Button = get_node_or_null("CanvasLayer/UIRoot/Bottom/HBoxContainer/UsePotionButton")
+@onready var btn_use_potion: BaseButton = get_node_or_null("CanvasLayer/UIRoot/PanelPotion/BtnPotion") as BaseButton
 
 # --- Boss choice dialog ---
 @onready var dungeon_choice: ConfirmationDialog = get_node_or_null("CanvasLayer/UIRoot/DungeonChoiceDialog")
@@ -104,25 +103,28 @@ var passive_dodge_chance: float = 0.0           # Assassin passive
 var passive_armor_bonus: int = 0                # Guardian passive (flat armor, capped with total)
 var bloodlust_lifesteal: float = 0.0            # Barbarian passive (ułamek leczenia z crita)
 
-# --- proste UI umiejętności ---
-var skills_panel: PanelContainer
-var lbl_skill1: Button
-var lbl_skill2: Button
-var skills_passive_label: Label
+# --- Modularne UI: 8 slotów aktywnych + 8 pól pasywnych (scena main.tscn) ---
+var skill_bar_buttons: Array[Button] = []
+var passive_skill_slots: Array[TextureRect] = []
+var skills_hotbar_wired: bool = false
+var _style_skill_hotbar_empty: StyleBoxFlat
+
+const _SKILL_BAR_STYLE_STATES := [
+	"normal", "hover", "pressed", "disabled", "focus",
+]
 
 var lbl_dungeon_name: Label
 
 # --- SKILL ICONS MAP ---
 const SKILL_ICONS: Dictionary = {
+	"Basic Strike": "res://ikony/basic_strike.png",
 	"Basic strike": "res://ikony/basic_strike.png",
 	"Power Strike": "res://ikony/power_strike.png",
 	"Quick Slash":  "res://ikony/quick_slash.png",
+	"Shield":       "res://ikony/shield_block.png",
 	"Shield Block": "res://ikony/shield_block.png",
 	"Fury":         "res://ikony/fury.png",
 }
-
-# przechowamy referencję do tła, żeby nie dodać go drugi raz
-var _skills_bg: TextureRect = null
 
 func _skill_icon_for(skill_name: String) -> Texture2D:
 	if skill_name == "":
@@ -136,13 +138,6 @@ func _skill_icon_for(skill_name: String) -> Texture2D:
 		var t2 = load(guess)
 		if t2 is Texture2D: return t2
 	return null
-
-func _skill_name_from_label(text: String) -> String:
-	# Zamienia "[1] Quick Slash" -> "Quick Slash"
-	var idx := text.find("] ")
-	if idx >= 0 and idx + 2 < text.length():
-		return text.substr(idx + 2, text.length() - (idx + 2)).strip_edges()
-	return text.strip_edges()
 
 
 # --- Parametry walki ---
@@ -2271,8 +2266,20 @@ func _update_potions_ui() -> void:
 				_:
 					potion_icon.texture = TEX_HP_BOTTLE_3
 			potion_icon.visible = true
-	if potions_ui:
-		potions_ui.visible = potions > 0
+	# Przycisk potki (PanelPotion/BtnPotion): ta sama grafika co PotionIcon (1/2/3 butelki)
+	if btn_use_potion is TextureButton:
+		var tb: TextureButton = btn_use_potion as TextureButton
+		if potions <= 0:
+			tb.texture_normal = null
+		else:
+			var nb: int = mini(potions, POTION_MAX)
+			match nb:
+				1:
+					tb.texture_normal = TEX_HP_BOTTLE_1
+				2:
+					tb.texture_normal = TEX_HP_BOTTLE_2
+				_:
+					tb.texture_normal = TEX_HP_BOTTLE_3
 	var can_use: bool = (turn == Turn.PLAYER) and (potions > 0) and (player.hp < player.max_hp)
 	if btn_use_potion:
 		btn_use_potion.disabled = not can_use
@@ -2534,8 +2541,8 @@ func _on_class_picked(class_key: String) -> void:
 	if lbl_log:
 		lbl_log.text = "Evolution complete! You are now a " + class_key.capitalize() + "."
 
-	# upewnij się, że panel skilli istnieje i jest zaktualizowany
-	if skills_panel == null:
+	# upewnij się, że hotbar skilli jest podłączony
+	if not skills_hotbar_wired:
 		_create_skills_ui()
 	_update_skills_ui()
 
@@ -3476,142 +3483,132 @@ func _strip_all_equipment_bonuses_for_save() -> void:
 	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
 
 
-func _create_skills_ui() -> void:
-	if skills_panel:
+func _style_skill_hotbar_empty_slot() -> StyleBoxFlat:
+	if _style_skill_hotbar_empty != null:
+		return _style_skill_hotbar_empty
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.34, 0.35, 0.39, 1.0)
+	sb.border_color = Color(0.20, 0.21, 0.25, 1.0)
+	sb.border_width_left = 1
+	sb.border_width_top = 1
+	sb.border_width_right = 1
+	sb.border_width_bottom = 1
+	sb.corner_radius_top_left = 6
+	sb.corner_radius_top_right = 6
+	sb.corner_radius_bottom_left = 6
+	sb.corner_radius_bottom_right = 6
+	sb.anti_aliasing = true
+	_style_skill_hotbar_empty = sb
+	return sb
+
+
+func _clear_skill_bar_theme_overrides(btn: Button) -> void:
+	for sn in _SKILL_BAR_STYLE_STATES:
+		btn.remove_theme_stylebox_override(sn)
+
+
+func _on_skill_bar_slot_pressed(slot: int) -> void:
+	_try_use_skill(slot)
+
+
+func _wire_modular_skills_ui() -> void:
+	if skills_hotbar_wired:
 		return
-
-	# Panel
-	skills_panel = PanelContainer.new()
-	skills_panel.name = "SkillsPanel"
-	skills_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	# Styl
-	var sb := _make_stylebox(UI_COL["panel"], UI_COL["border"], 12, 2)
-	skills_panel.add_theme_stylebox_override("panel", sb)
-
-	# Pozycjonowanie: dół-środek
-	skills_panel.anchor_left = 0.5
-	skills_panel.anchor_right = 0.5
-	skills_panel.anchor_top = 1.0
-	skills_panel.anchor_bottom = 1.0
-	skills_panel.offset_left = -220
-	skills_panel.offset_right = 220
-	skills_panel.offset_top = -84
-	skills_panel.offset_bottom = -16
-	_ensure_skills_bg()
-
-
-	# Layout
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 6)
-	skills_panel.add_child(root)
-
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	root.add_child(row)
-
-	# Slot [1]
-	lbl_skill1 = Button.new()
-	lbl_skill1.text = "[1] —"
-	lbl_skill1.focus_mode = Control.FOCUS_NONE
-	lbl_skill1.disabled = false
-	lbl_skill1.custom_minimum_size = Vector2(190, 36)
-	lbl_skill1.pressed.connect(func(): _try_use_skill(1))
-	row.add_child(lbl_skill1)
-
-	# Slot [2] (ukryty, jeśli brak skilla)
-	lbl_skill2 = Button.new()
-	lbl_skill2.text = "[2] —"
-	lbl_skill2.focus_mode = Control.FOCUS_NONE
-	lbl_skill2.disabled = true
-	lbl_skill2.visible = false
-	lbl_skill2.custom_minimum_size = Vector2(190, 36)
-	lbl_skill2.pressed.connect(func(): _try_use_skill(2))
-	row.add_child(lbl_skill2)
-	
-		# po dodaniu lbl_skill1 i lbl_skill2:
-	if lbl_skill1:
-		lbl_skill1.expand_icon = false
-		lbl_skill1.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
-		lbl_skill1.alignment = HORIZONTAL_ALIGNMENT_LEFT
-
-	if lbl_skill2:
-		lbl_skill2.expand_icon = false
-		lbl_skill2.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
-		lbl_skill2.alignment = HORIZONTAL_ALIGNMENT_LEFT
-
-	# PASSIVE label pod przyciskami
-	var passive_lbl := Label.new()
-	passive_lbl.name = "PassiveLabel"
-	passive_lbl.text = ""
-	passive_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	passive_lbl.visible = false
-	root.add_child(passive_lbl)
-	skills_passive_label = passive_lbl
-
-	# Dodanie do UI
-	if $CanvasLayer:
-		$CanvasLayer.add_child(skills_panel)
-	else:
-		add_child(skills_panel)
-
-	# Odśwież stan
-	_update_skills_ui()
+	var grid := get_node_or_null("CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid") as GridContainer
+	var pgrid := get_node_or_null("CanvasLayer/UIRoot/PanelPassiveSkills/PassiveSkillsGrid") as GridContainer
+	if grid == null:
+		push_error("main.tscn: brak CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid — hotbar skilli nie działa.")
+		return
+	skill_bar_buttons.clear()
+	passive_skill_slots.clear()
+	for slot in range(1, 9):
+		var b := grid.get_node_or_null("SkillSlot%d" % slot) as Button
+		if b == null:
+			push_error("main.tscn: brak SkillSlot%d w ActiveSkillsGrid." % slot)
+			continue
+		b.focus_mode = Control.FOCUS_NONE
+		b.pressed.connect(_on_skill_bar_slot_pressed.bind(slot))
+		skill_bar_buttons.append(b)
+	if pgrid:
+		for pi in range(1, 9):
+			var tr := pgrid.get_node_or_null("PassiveSlot%d" % pi) as TextureRect
+			if tr:
+				tr.mouse_filter = Control.MOUSE_FILTER_STOP
+				passive_skill_slots.append(tr)
+	skills_hotbar_wired = (skill_bar_buttons.size() == 8)
 
 
+func _create_skills_ui() -> void:
+	if skills_hotbar_wired:
+		return
+	_wire_modular_skills_ui()
 
+
+func _passive_ui_lines() -> PackedStringArray:
+	var out: PackedStringArray = []
+	var main := _current_passive_description().strip_edges()
+	if main != "":
+		out.append(main)
+	return out
+
+
+func _update_passive_skills_ui() -> void:
+	if passive_skill_slots.is_empty():
+		return
+	var lines := _passive_ui_lines()
+	for i in range(passive_skill_slots.size()):
+		var tr: TextureRect = passive_skill_slots[i]
+		if tr == null or not is_instance_valid(tr):
+			continue
+		if i < lines.size():
+			tr.visible = true
+			tr.tooltip_text = String(lines[i])
+			tr.modulate = Color.WHITE
+		else:
+			tr.visible = true
+			tr.tooltip_text = ""
+			tr.modulate = Color(0.45, 0.45, 0.48, 0.35)
 
 
 func _update_skills_ui() -> void:
-	if not skills_panel:
+	if not skills_hotbar_wired or skill_bar_buttons.size() != 8:
 		return
+	for idx in range(8):
+		var slot: int = idx + 1
+		var btn: Button = skill_bar_buttons[idx]
+		if btn == null or not is_instance_valid(btn):
+			continue
+		if skills.has(slot):
+			_clear_skill_bar_theme_overrides(btn)
+			btn.flat = true
+			var sd: Dictionary = skills[slot]
+			var nm := String(sd.get("name", "—"))
+			var cd := int(skill_cooldowns.get(slot, 0))
+			var desc := String(sd.get("desc", ""))
+			btn.visible = true
+			btn.disabled = cd > 0
+			btn.icon = _skill_icon_for(nm)
+			btn.expand_icon = true
+			btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			btn.text = ""
+			var tt := "[%d] %s\n%s" % [slot, nm, desc]
+			if cd > 0:
+				tt += "\nCooldown: %d" % cd
+			btn.tooltip_text = tt
+			btn.modulate = Color.WHITE if cd == 0 else Color(0.7, 0.7, 0.72, 1.0)
+		else:
+			var es := _style_skill_hotbar_empty_slot()
+			for sn in _SKILL_BAR_STYLE_STATES:
+				btn.add_theme_stylebox_override(sn, es)
+			btn.flat = false
+			btn.visible = true
+			btn.disabled = true
+			btn.icon = null
+			btn.text = ""
+			btn.tooltip_text = "Skill slot %d (empty)." % slot
+			btn.modulate = Color.WHITE
 
-	# --- Slot [1] ---
-	var name1 := "—"
-	var cd1 := 0
-	if skills.has(1):
-		name1 = String(skills[1].get("name","—"))
-		cd1 = int(skill_cooldowns.get(1, 0))
-	if lbl_skill1:
-		lbl_skill1.text = "[1] %s%s" % [
-			name1,
-			"  (CD:%d)" % cd1 if cd1 > 0 else ""
-		]
-		lbl_skill1.disabled = (cd1 > 0 or not skills.has(1))
-
-	# --- Slot [2] (pokazuj tylko, jeśli skill istnieje) ---
-	var has2 := skills.has(2)
-	var name2 := ""
-	var cd2 := 0
-	if has2:
-		name2 = String(skills[2].get("name","—"))
-		cd2 = int(skill_cooldowns.get(2, 0))
-
-	if lbl_skill2:
-		lbl_skill2.visible = has2
-		if has2:
-			lbl_skill2.text = "[2] %s%s" % [
-				name2,
-				"  (CD:%d)" % cd2 if cd2 > 0 else ""
-			]
-			lbl_skill2.disabled = (cd2 > 0)
-
-	# --- PASSIVE opis pod spodem (po wybraniu klasy) ---
-	var passive_lbl := skills_passive_label
-	if passive_lbl == null:
-		# awaryjnie spróbuj znaleźć rekurencyjnie (np. po przeładowaniu UI)
-		passive_lbl = skills_panel.find_child("PassiveLabel", true, false) as Label
-		skills_passive_label = passive_lbl
-	if passive_lbl:
-		var ptxt := _current_passive_description()
-		passive_lbl.text = ptxt
-		passive_lbl.visible = (ptxt != "")
-
-
-	# Upewnij się, że panel jest widoczny
-	skills_panel.visible = true
-	_refresh_skill_icons()
+	_update_passive_skills_ui()
 
 
 
@@ -4063,60 +4060,6 @@ func _update_world_background_position() -> void:
 	var center := cam.get_screen_center_position()
 	# move bg so its top-left matches the screen top-left
 	bg_sprite.global_position = center - Vector2(vp.x * 0.5 / sc.x, vp.y * 0.5 / sc.y)
-
-func _ensure_skills_bg() -> void:
-	if skills_panel == null:
-		return
-	if _skills_bg != null and is_instance_valid(_skills_bg):
-		return
-
-	var tex: Texture2D = null
-
-	# jeśli w tym skrypcie istnieje globalny słownik UI_TEX – użyj go
-	if "UI_TEX" in self:
-		var val = self["UI_TEX"]
-		if typeof(val) == TYPE_DICTIONARY and val.has("bg_tile"):
-			var p := String(val["bg_tile"])
-			if p != "":
-				tex = load(p)
-
-	# fallback – domyślne „skórzane” tło
-	if tex == null:
-		tex = load("res://ui/textures/leather_bg.png")
-
-	if tex:
-		_skills_bg = TextureRect.new()
-		_skills_bg.name = "SkillsBG"
-		_skills_bg.texture = tex
-		_skills_bg.stretch_mode = TextureRect.STRETCH_TILE
-		_skills_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		_skills_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_skills_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-		skills_panel.add_child(_skills_bg)
-		skills_panel.move_child(_skills_bg, 0)
-
-
-func _refresh_skill_icons() -> void:
-	# [ikona] [1] Nazwa — ikona po LEWEJ, tekst po PRAWEJ
-	if lbl_skill1:
-		var n1 := _skill_name_from_label(lbl_skill1.text)
-		lbl_skill1.icon = _skill_icon_for(n1)
-		lbl_skill1.expand_icon = false
-		lbl_skill1.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
-		lbl_skill1.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		lbl_skill1.clip_text = true
-		lbl_skill1.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		lbl_skill1.add_theme_constant_override("content_margin_left", 8)
-
-	if lbl_skill2:
-		var n2 := _skill_name_from_label(lbl_skill2.text)
-		lbl_skill2.icon = _skill_icon_for(n2)
-		lbl_skill2.expand_icon = false
-		lbl_skill2.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
-		lbl_skill2.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		lbl_skill2.clip_text = true
-		lbl_skill2.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		lbl_skill2.add_theme_constant_override("content_margin_left", 8)
 
 # ===============================
 # DEV / DEBUG: generuje po 10 losowych itemów każdego typu
