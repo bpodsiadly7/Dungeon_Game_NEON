@@ -27,6 +27,7 @@ shape = SubResource("ConvexPolygonShape3D_8eeak")
 
 [node name="Mesh" type="MeshInstance3D" parent="FaceHighligth" index="0"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, -0.8)
+visible = false
 material_override = ExtResource("5_hbgsa")
 ignore_occlusion_culling = true
 mesh = SubResource("ArrayMesh_flf8q")

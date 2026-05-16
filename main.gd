@@ -3,7 +3,28 @@ extends Node2D
 # --- UI odwołania ---
 @onready var lbl_player   := $CanvasLayer/UIRoot/Left/LabelPlayer
 @onready var lbl_enemy    := $CanvasLayer/UIRoot/Right/LabelEnemy
-@onready var btn_attack: BaseButton = get_node_or_null("CanvasLayer/UIRoot/PanelAttack/BtnAttack") as BaseButton
+@onready var btn_attack: BaseButton = get_node_or_null(
+	"CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColBasic/BtnAttack"
+) as BaseButton
+@onready var btn_safe_attack: BaseButton = get_node_or_null(
+	"CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotSafe/BtnSafeAttack"
+) as BaseButton
+@onready var btn_wild_attack: BaseButton = get_node_or_null(
+	"CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotWild/BtnWildAttack"
+) as BaseButton
+@onready var highlight_attack_basic: ColorRect = get_node_or_null(
+	"CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColBasic/HighlightBasic"
+) as ColorRect
+@onready var highlight_attack_safe: ColorRect = get_node_or_null(
+	"CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotSafe/HighlightSafe"
+) as ColorRect
+@onready var highlight_attack_wild: ColorRect = get_node_or_null(
+	"CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotWild/HighlightWild"
+) as ColorRect
+
+const _ATTACK_SLOT_HIGHLIGHT_OFF := Color(0, 0, 0, 0)
+const _ATTACK_SLOT_HIGHLIGHT_HOVER := Color(1.0, 0.88, 0.38, 0.42)
+const _ATTACK_SLOT_HIGHLIGHT_PRESS := Color(1.0, 0.96, 0.58, 0.58)
 @onready var lbl_log      := $CanvasLayer/UIRoot/Bottom/HBoxContainer/CombatLog
 @onready var next_dialog: AcceptDialog = get_node_or_null("CanvasLayer/UIRoot/NextEnemyDialog")
 @onready var cam: Camera2D = $Camera2D
@@ -61,8 +82,20 @@ var next_enemy_data: Dictionary = {}
 var DMG_FONT: FontFile = preload("res://MedievalSharp-Bold.ttf")
 
 enum Turn { PLAYER, ENEMY }
+enum AttackMode { BASIC, SAFE, WILD }
+
+const SAFE_ATTACK_CRIT := 10
+const WILD_D10_DMG_PER_POINT := 0.06
+const _DICE_PAIR_LANE_X: Array[float] = [-115.0, 115.0]
+const _DICE_PAIR_ANIM_SCALE := 0.58
+const _DICE_PAIR_GAP_SEC := 0.04
+
 var turn: Turn = Turn.PLAYER
 var enemy_turn_delay: float = 0.6
+
+## Modyfikator pancerza gracza (Safe + / Wild -) — aktywny do początku następnej tury gracza.
+var player_temp_armor_delta: int = 0
+var _default_dice_set: Array[DiceDef] = []
 
 var current_enemy_data: Dictionary = {}
 var resolving_turn: bool = false
@@ -103,8 +136,9 @@ var passive_dodge_chance: float = 0.0           # Assassin passive
 var passive_armor_bonus: int = 0                # Guardian passive (flat armor, capped with total)
 var bloodlust_lifesteal: float = 0.0            # Barbarian passive (ułamek leczenia z crita)
 
-# --- Modularne UI: 8 slotów aktywnych + 8 pól pasywnych (scena main.tscn) ---
-var skill_bar_buttons: Array[Button] = []
+# --- Modularne UI: sloty aktywne/pasywne z main.tscn (liczba wg sceny) ---
+var skill_bar_buttons: Array[BaseButton] = []
+var skill_bar_slot_numbers: Array[int] = []
 var passive_skill_slots: Array[TextureRect] = []
 var skills_hotbar_wired: bool = false
 var _style_skill_hotbar_empty: StyleBoxFlat
@@ -509,11 +543,11 @@ func _ready() -> void:
 	# Stan startowy panelu
 	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
 	_apply_stats_panel_font_sizes()
-	# Attack
+	# Attack (Basic / Safe / Wild)
 	turn = Turn.PLAYER
-	if btn_attack:
-		btn_attack.disabled = false
-		btn_attack.pressed.connect(_on_attack_pressed)
+	_cache_default_dice_set()
+	_set_attack_buttons_disabled(false)
+	_wire_attack_slot_ui()
 	# Next enemy dialog
 	if next_dialog:
 		next_dialog.confirmed.connect(Callable(self, "_on_next_enemy_confirmed"))
@@ -829,10 +863,11 @@ func _apply_global_font() -> void:
 
 func set_turn(t: Turn) -> void:
 	turn = t
-	if btn_attack:
-		btn_attack.disabled = (turn != Turn.PLAYER)
+	if t == Turn.PLAYER:
+		_refresh_player_armor_label()
+	_set_attack_buttons_disabled(turn != Turn.PLAYER)
 	if turn == Turn.PLAYER:
-		if lbl_log: lbl_log.text = "Your turn. Press Attack."
+		if lbl_log: lbl_log.text = "Your turn. Choose an attack."
 	else:
 		if lbl_log: lbl_log.text = "Enemy is thinking..."
 		await get_tree().create_timer(enemy_turn_delay).timeout
@@ -926,6 +961,7 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 		return
 
 
+	player_temp_armor_delta = 0
 	current_enemy_data = data.duplicate(true)
 	# Ensure armor exists (new armor system). Fallback from difficulty.
 	if not current_enemy_data.has("armor"):
@@ -980,27 +1016,129 @@ func _process(_d: float) -> void:
 	if Input.is_action_just_pressed("attack"):
 		print("[DEBUG] Attack key pressed! turn=%s player_alive=%s enemy_alive=%s" % [turn, player.is_alive(), enemy.is_alive()])
 		if turn == Turn.PLAYER and player.is_alive() and enemy.is_alive():
-			_on_attack_pressed()
+			_execute_player_attack(AttackMode.BASIC)
 	# unspent points indicator is positioned under dungeon label
 	_update_world_background_position()
 
-func _on_attack_pressed() -> void:
-	if resolving_turn: return
-	if turn != Turn.PLAYER or not player.is_alive() or not enemy.is_alive(): return
 
-	# --- Treasure Chest: otwieramy natychmiast, bez D20 i tur ---
+func _set_attack_slot_highlight(slot: ColorRect, active: bool, pressed: bool = false) -> void:
+	if slot == null or not is_instance_valid(slot):
+		return
+	if not active:
+		slot.color = _ATTACK_SLOT_HIGHLIGHT_OFF
+	elif pressed:
+		slot.color = _ATTACK_SLOT_HIGHLIGHT_PRESS
+	else:
+		slot.color = _ATTACK_SLOT_HIGHLIGHT_HOVER
+
+
+func _clear_attack_slot_highlights() -> void:
+	_set_attack_slot_highlight(highlight_attack_basic, false)
+	_set_attack_slot_highlight(highlight_attack_safe, false)
+	_set_attack_slot_highlight(highlight_attack_wild, false)
+
+
+func _wire_attack_slot_ui() -> void:
+	_wire_one_attack_slot(btn_attack, highlight_attack_basic, AttackMode.BASIC)
+	_wire_one_attack_slot(btn_safe_attack, highlight_attack_safe, AttackMode.SAFE)
+	_wire_one_attack_slot(btn_wild_attack, highlight_attack_wild, AttackMode.WILD)
+
+
+func _wire_one_attack_slot(btn: BaseButton, highlight: ColorRect, mode: AttackMode) -> void:
+	if btn == null:
+		return
+	btn.pressed.connect(func(): _execute_player_attack(mode))
+	btn.mouse_entered.connect(func():
+		if not btn.disabled:
+			_set_attack_slot_highlight(highlight, true)
+	)
+	btn.mouse_exited.connect(func():
+		_set_attack_slot_highlight(highlight, false)
+	)
+	btn.button_down.connect(func():
+		if not btn.disabled:
+			_set_attack_slot_highlight(highlight, true, true)
+	)
+	btn.button_up.connect(func():
+		if not btn.disabled and btn.is_hovered():
+			_set_attack_slot_highlight(highlight, true, false)
+		else:
+			_set_attack_slot_highlight(highlight, false)
+	)
+
+
+func _set_attack_buttons_disabled(disabled: bool) -> void:
+	if btn_attack:
+		btn_attack.disabled = disabled
+	if btn_safe_attack:
+		btn_safe_attack.disabled = disabled
+	if btn_wild_attack:
+		btn_wild_attack.disabled = disabled
+	if disabled:
+		_clear_attack_slot_highlights()
+
+
+func _refresh_player_armor_label() -> void:
+	if lbl_player_armor_value:
+		lbl_player_armor_value.text = str(_calc_player_armor_total())
+
+
+func _execute_player_attack(mode: AttackMode) -> void:
+	if resolving_turn:
+		return
+	if turn != Turn.PLAYER or not player.is_alive() or not enemy.is_alive():
+		return
+
+	# Safe/Wild: bonus trwa przez turę wroga i widać go na początku twojej tury;
+	# znika dopiero gdy w tej turze wykonasz kolejny atak.
+	if player_temp_armor_delta != 0:
+		player_temp_armor_delta = 0
+		_refresh_player_armor_label()
+
 	if bool(current_enemy_data.get("treasure", false)):
 		resolving_turn = true
-		if lbl_log: lbl_log.text = "You open the chest..."
+		if lbl_log:
+			lbl_log.text = "You open the chest..."
 		await get_tree().create_timer(0.3).timeout
-		enemy.take_damage(enemy.hp)   # HP → 0, odpala sygnał defeated
+		enemy.take_damage(enemy.hp)
 		resolving_turn = false
 		return
 
 	resolving_turn = true
-	var roll:int = randi_range(1, 20)
-	await _play_d20_animation(roll)
-	var desc: String = _player_attack_round_with_roll(roll)
+	var desc := ""
+
+	match mode:
+		AttackMode.BASIC:
+			var roll: int = randi_range(1, 20)
+			await _play_dice_roll_animation([roll], ["D20"])
+			desc = _player_attack_round_with_roll(roll)
+
+		AttackMode.SAFE:
+			var atk_roll: int = randi_range(1, 10)
+			var guard_roll: int = randi_range(1, 6)
+			await _play_dice_roll_animation(
+				[_d10_face_value(atk_roll), guard_roll],
+				["D10", "D6"]
+			)
+			player_temp_armor_delta += 1
+			_refresh_player_armor_label()
+			desc = _player_safe_attack_round(atk_roll, guard_roll)
+
+		AttackMode.WILD:
+			var d20_roll: int = randi_range(1, 20)
+			var d10_roll: int = randi_range(1, 10)
+			await _play_dice_roll_animation(
+				[d20_roll, _d10_face_value(d10_roll)],
+				["D20", "D10"]
+			)
+			player_temp_armor_delta -= 1
+			_refresh_player_armor_label()
+			var wild_mult: float = 1.0 + float(d10_roll - 1) * WILD_D10_DMG_PER_POINT
+			desc = _player_attack_round_with_roll(d20_roll, wild_mult)
+			desc += "Wild d10=%d → +%d%% dmg. Armor -1 until your next turn.\n" % [
+				d10_roll, int(round((wild_mult - 1.0) * 100.0))
+			]
+
 	if lbl_log:
 		lbl_log.text = desc
 	await get_tree().create_timer(0.1).timeout
@@ -1009,8 +1147,15 @@ func _on_attack_pressed() -> void:
 	_tick_skill_cooldowns()
 	resolving_turn = false
 
+
 # --- Tura gracza ---
-func _player_attack_round_with_roll(roll:int) -> String:
+func _player_safe_attack_round(atk_roll: int, guard_roll: int) -> String:
+	var text := "Safe Attack: d10=%d, Guard d6=%d. +1 Armor until your next turn.\n" % [atk_roll, guard_roll]
+	text += _player_attack_round_with_roll(atk_roll, 1.0, SAFE_ATTACK_CRIT)
+	return text
+
+
+func _player_attack_round_with_roll(roll: int, extra_dmg_mult: float = 1.0, crit_on: int = CRIT) -> String:
 	var text := ""
 	# Must be set BEFORE enemy.take_damage(), because `defeated` signal fires inside it.
 	_last_kill_context = {"roll": roll, "weapon_before": weapon.duplicate(true)}
@@ -1019,8 +1164,8 @@ func _player_attack_round_with_roll(roll:int) -> String:
 	# Armor-based hit rules:
 	# roll < armor -> miss
 	# roll == armor -> half
-	# roll > armor and < 20 -> scaled hit
-	# roll == 20 -> crit
+	# roll > armor and < crit_on -> scaled hit
+	# roll == crit_on -> crit
 	if roll < enemy_armor:
 		show_damage_popup(enemy, "dodge", "miss")
 		text += "You roll %d vs Armor %d → MISS.\n" % [roll, enemy_armor]
@@ -1029,16 +1174,16 @@ func _player_attack_round_with_roll(roll:int) -> String:
 	var base_dmg: int = calc_player_weapon_damage()
 	var kind := "hit"
 	var mult := 1.0
-	var crit := (roll == CRIT)
+	var crit := (roll == crit_on)
 	if crit:
 		kind = "crit"
 		mult = calc_crit_multiplier()
 	elif roll == enemy_armor:
 		mult = 0.5
 	else:
-		mult = damage_multiplier_from_roll(roll, enemy_armor)
+		mult = damage_multiplier_from_roll(roll, enemy_armor, crit_on - 1)
 
-	var dmg: int = max(1, int(round(float(base_dmg) * mult)))
+	var dmg: int = max(1, int(round(float(base_dmg) * mult * extra_dmg_mult)))
 	enemy.take_damage(dmg)
 	show_damage_popup(enemy, str(dmg), kind)
 	text += "You roll %d vs Armor %d → %s for %d dmg.\n" % [
@@ -1056,16 +1201,23 @@ func _player_attack_round_with_roll(roll:int) -> String:
 		text += "Enemy defeated!"
 	return text
 
-func damage_multiplier_from_roll(roll: int, armor: int) -> float:
-	# roll is in (armor, 20)
-	var min_roll = clamp(armor + 1, 1, 19)
-	var max_roll := 19
+func damage_multiplier_from_roll(roll: int, armor: int, max_non_crit: int = 19) -> float:
+	# roll is in (armor, max_non_crit)
+	var min_roll: int = clampi(armor + 1, 1, max_non_crit)
+	var max_roll: int = max_non_crit
 	if roll <= min_roll:
 		return 1.0
 	if roll >= max_roll:
 		return 1.8
 	var t := float(roll - min_roll) / float(max(1, max_roll - min_roll))
 	return lerpf(1.0, 1.8, t)
+
+
+func _d10_face_value(roll_1_to_10: int) -> int:
+	# Model D10 w dice_roller używa ścian 0–9; 10 → 0.
+	if roll_1_to_10 >= 10:
+		return 0
+	return roll_1_to_10
 
 
 
@@ -1244,7 +1396,7 @@ func _calc_player_armor_total() -> int:
 				bonus = max(bonus, 1)
 			elif c >= 3:
 				bonus = max(bonus, 2)
-	return clamp(base + bonus + passive_armor_bonus, 0, 15)
+	return clamp(base + bonus + passive_armor_bonus + player_temp_armor_delta, 0, 15)
 
 func _on_enemy_hp_changed(cur:int, maxv:int) -> void:
 	if enemy_hp_bar:
@@ -1757,71 +1909,140 @@ func _on_player_level_changed(level: int, stat_points_now: int) -> void:
 	# Player spends points from Inventory; we only nudge via the unspent indicator.
 	_update_unspent_points_indicator(stat_points_now)
 
+func _cache_default_dice_set() -> void:
+	if dice_roller == null or dice_roller.dice_set.is_empty():
+		return
+	_default_dice_set.clear()
+	for dd in dice_roller.dice_set:
+		if dd is DiceDef:
+			_default_dice_set.append((dd as DiceDef).duplicate(true))
+func _apply_dice_set_shapes_on(roller: DiceRoller, shape_ids: Array[String]) -> void:
+	if roller == null:
+		return
+	var new_set: Array[DiceDef] = []
+	for sid in shape_ids:
+		var dd := DiceDef.new()
+		dd.name = sid
+		dd.shape = DiceShape.new(sid)
+		dd.color = Color(0.92, 0.88, 0.78)
+		new_set.append(dd)
+	roller.dice_set = new_set
+
+
+func _apply_dice_set_shapes(shape_ids: Array[String]) -> void:
+	_apply_dice_set_shapes_on(dice_roller, shape_ids)
+
+
+func _restore_default_dice_set_on(roller: DiceRoller) -> void:
+	if roller == null:
+		return
+	if _default_dice_set.is_empty():
+		var dd := DiceDef.new()
+		dd.name = "D20"
+		dd.shape = DiceShape.new("D20")
+		roller.dice_set = [dd]
+	else:
+		roller.dice_set = _default_dice_set.duplicate(true)
+
+
+func _restore_default_dice_set() -> void:
+	_restore_default_dice_set_on(dice_roller)
+
+
 func _play_d20_animation(final_roll: int) -> void:
+	await _play_legacy_dice_roll_animation([final_roll], ["D20"])
+
+
+func _play_dice_roll_animation(faces: Array[int], shape_ids: Array[String]) -> void:
 	if not dice_display or not dice_roller:
 		return
+	if faces.is_empty() or shape_ids.is_empty() or faces.size() != shape_ids.size():
+		push_warning("Dice animation: faces/shapes mismatch.")
+		return
+	if faces.size() == 1:
+		await _play_legacy_dice_roll_animation(faces, shape_ids)
+	else:
+		await _play_multi_dice_cinematic(faces, shape_ids)
 
-	var is_crit := (final_roll == CRIT)
+
+func _play_legacy_dice_roll_animation(
+	faces: Array[int],
+	shape_ids: Array[String],
+	lane_offset_x: float = 0.0,
+	time_scale: float = 1.0
+) -> void:
+	if not dice_display or not dice_roller:
+		return
+	time_scale = clampf(time_scale, 0.25, 1.0)
+
+	_apply_dice_set_shapes(shape_ids)
+
+	var is_crit := false
 	var is_miss := false
+	if shape_ids[0] == "D20":
+		is_crit = (faces[0] == CRIT)
+	elif shape_ids[0] == "D10":
+		is_crit = (faces[0] == 0 or faces[0] == SAFE_ATTACK_CRIT)
 
-	# Losowe miejsce lądowania w okolicach centrum
 	var rand_offset := Vector2(randf_range(-60, 60), randf_range(-30, 30))
 	var land_pos := Vector2(
 		get_viewport_rect().size.x / 2.0 - 250,
 		get_viewport_rect().size.y / 2.0 - 250
-	) + rand_offset
+	) + rand_offset + Vector2(lane_offset_x, 0)
 
-	# Startowa pozycja — za lewą krawędzią
 	dice_display.position = Vector2(-600, land_pos.y)
 	dice_display.modulate = Color(1, 1, 1, 1)
 	dice_display.visible = true
 
-	# Obracaj DiceDisplay podczas wjazdu — symuluje toczenie się po stole
 	dice_display.pivot_offset = Vector2(250, 250)
 	var tw_spin := get_tree().create_tween()
-	tw_spin.set_loops(0)
-	tw_spin.tween_property(dice_display, "rotation_degrees", 360.0, 0.4)
+	tw_spin.tween_property(dice_display, "rotation_degrees", 360.0, 0.4 * time_scale)
 
-	# Wjazd poziomo — prosta linia
 	var tw_in := get_tree().create_tween()
 	tw_in.set_ease(Tween.EASE_OUT)
 	tw_in.set_trans(Tween.TRANS_CUBIC)
-	tw_in.tween_property(dice_display, "position:x", land_pos.x, 0.5)
+	tw_in.tween_property(dice_display, "position:x", land_pos.x, 0.5 * time_scale)
 
-	# Pokaż właściwą ścianę PODCZAS lotu — zmiana niewidoczna dla gracza
-
-	var faces: Array[int] = [final_roll]
 	dice_roller.show_faces(faces)
-	# Ukryj highlight na każdej kostce
-	await get_tree().create_timer(0.35).timeout
+	await get_tree().create_timer(0.35 * time_scale).timeout
 	for dice in dice_roller.dices:
 		dice.dehighlight()
 
 	await tw_in.finished
 
-	# Zatrzymaj obrót — kostka stoi nieruchomo z właściwym wynikiem
 	tw_spin.kill()
 	dice_display.rotation_degrees = 0.0
-	await _dice_burst_effect(is_crit, is_miss, land_pos)
+	await _dice_burst_effect(is_crit, is_miss, land_pos, time_scale)
 
-
-	# Shake kamery
 	if is_crit:
-		shake_camera(10.0, 0.2)
+		shake_camera(10.0, 0.2 * time_scale)
 	elif is_miss:
-		shake_camera(4.0, 0.15)
+		shake_camera(4.0, 0.15 * time_scale)
 
-	await get_tree().create_timer(0.8).timeout
+	await get_tree().create_timer(0.8 * time_scale).timeout
 
-	# Wylot w prawo
 	var tw_out := get_tree().create_tween()
 	tw_out.set_ease(Tween.EASE_IN)
 	tw_out.set_trans(Tween.TRANS_CUBIC)
-	tw_out.tween_property(dice_display, "position:x", get_viewport_rect().size.x + 200, 0.35)
+	tw_out.tween_property(dice_display, "position:x", get_viewport_rect().size.x + 200, 0.35 * time_scale)
 	await tw_out.finished
 
 	dice_display.rotation_degrees = 0.0
 	dice_display.visible = false
+	_restore_default_dice_set()
+
+
+func _play_multi_dice_cinematic(faces: Array[int], shape_ids: Array[String]) -> void:
+	# Safe / Wild: dwie pełne animacje d20 jedna po drugiej.
+	for i in range(faces.size()):
+		var lane: float = 0.0
+		if i < _DICE_PAIR_LANE_X.size():
+			lane = _DICE_PAIR_LANE_X[i]
+		await _play_legacy_dice_roll_animation(
+			[faces[i]], [shape_ids[i]], lane, _DICE_PAIR_ANIM_SCALE
+		)
+		if i + 1 < faces.size():
+			await get_tree().create_timer(_DICE_PAIR_GAP_SEC).timeout
 
 # ─────────────────────────────────────────────────────────────
 # DICE BURST PARTICLES
@@ -1829,12 +2050,21 @@ func _play_d20_animation(final_roll: int) -> void:
 #   await _dice_burst_effect(is_crit, is_miss, land_pos)
 # ─────────────────────────────────────────────────────────────
 
-func _dice_burst_effect(is_crit: bool, is_miss: bool, land_pos: Vector2) -> void:
+func _dice_burst_effect(
+	is_crit: bool,
+	is_miss: bool,
+	land_pos: Vector2,
+	time_scale: float = 1.0
+) -> void:
 	var center := land_pos + Vector2(250, 250)
+	time_scale = clampf(time_scale, 0.25, 1.0)
+	var particle_speed := 1.0 / time_scale if time_scale < 1.0 else 1.0
+	var burst_px := func(cfg: Dictionary) -> void:
+		_spawn_dice_particles(center, cfg, particle_speed)
 
 	if is_crit:
 		# Główne złote iskry — ostre i szybkie jak w FF
-		_spawn_dice_particles(center, {
+		burst_px.call({
 			"amount":        60,
 			"lifetime":      0.6,
 			"explosiveness": 0.98,
@@ -1849,7 +2079,7 @@ func _dice_burst_effect(is_crit: bool, is_miss: bool, land_pos: Vector2) -> void
 			"damping_max":   160.0,
 		})
 		# Białe mikro-iskierki — drugie pasmo
-		_spawn_dice_particles(center, {
+		burst_px.call({
 			"amount":        40,
 			"lifetime":      0.4,
 			"explosiveness": 1.0,
@@ -1869,7 +2099,7 @@ func _dice_burst_effect(is_crit: bool, is_miss: bool, land_pos: Vector2) -> void
 
 	elif is_miss:
 		# Klasyczne JRPG miss — małe szare iskierki zamiast dymu
-		_spawn_dice_particles(center, {
+		burst_px.call({
 			"amount":        18,
 			"lifetime":      0.65,
 			"explosiveness": 0.75,
@@ -1884,7 +2114,7 @@ func _dice_burst_effect(is_crit: bool, is_miss: bool, land_pos: Vector2) -> void
 			"damping_max":   80.0,
 		})
 		# Drugi layer — ciemniejsze, opadające
-		_spawn_dice_particles(center, {
+		burst_px.call({
 			"amount":        12,
 			"lifetime":      0.5,
 			"explosiveness": 0.6,
@@ -1902,7 +2132,7 @@ func _dice_burst_effect(is_crit: bool, is_miss: bool, land_pos: Vector2) -> void
 
 	else:
 		# Hit — pomarańczowo-czerwony, energiczny
-		_spawn_dice_particles(center, {
+		burst_px.call({
 			"amount":        35,
 			"lifetime":      0.5,
 			"explosiveness": 0.95,
@@ -1917,7 +2147,7 @@ func _dice_burst_effect(is_crit: bool, is_miss: bool, land_pos: Vector2) -> void
 			"damping_max":   110.0,
 		})
 		# Żółty rdzeń — krótki błysk
-		_spawn_dice_particles(center, {
+		burst_px.call({
 			"amount":        20,
 			"lifetime":      0.3,
 			"explosiveness": 1.0,
@@ -1934,9 +2164,9 @@ func _dice_burst_effect(is_crit: bool, is_miss: bool, land_pos: Vector2) -> void
 		_spawn_dice_glow(center, Color(1.0, 0.6, 0.1, 0.45), 160.0, 0.16)
 
 	var wait := 0.6 if is_crit else (0.65 if is_miss else 0.5)
-	await get_tree().create_timer(wait * 0.55).timeout
+	await get_tree().create_timer(wait * 0.55 * time_scale).timeout
 
-func _spawn_dice_particles(center: Vector2, cfg: Dictionary) -> void:
+func _spawn_dice_particles(center: Vector2, cfg: Dictionary, speed_scale: float = 1.0) -> void:
 	var p := GPUParticles2D.new()
 	p.z_index      = 320
 	p.position     = center
@@ -1945,7 +2175,7 @@ func _spawn_dice_particles(center: Vector2, cfg: Dictionary) -> void:
 	p.amount       = int(cfg["amount"])
 	p.lifetime     = float(cfg["lifetime"])
 	p.explosiveness = float(cfg["explosiveness"])
-	p.speed_scale  = 1.0
+	p.speed_scale  = speed_scale
 
 	var mat := ParticleProcessMaterial.new()
 	mat.emission_shape          = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
@@ -2115,8 +2345,8 @@ func _show_stats_panel() -> void:
 	var tw := get_tree().create_tween()
 	tw.tween_property(stats_panel, "modulate:a", 1.0, 0.15).from(0.0)
 	tw.parallel().tween_property(stats_panel, "scale", Vector2(1, 1), 0.15)
-	if btn_attack:
-		btn_attack.disabled = (player.stat_points > 0)
+	if player.stat_points > 0:
+		_set_attack_buttons_disabled(true)
 
 func _hide_stats_panel() -> void:
 	if not stats_panel:
@@ -2155,9 +2385,8 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 
-	# odblokuj Attack jeśli to tura gracza
-	if turn == Turn.PLAYER and btn_attack:
-		btn_attack.disabled = false
+	if turn == Turn.PLAYER and not (stats_panel and stats_panel.visible and player.stat_points > 0):
+		_set_attack_buttons_disabled(false)
 
 
 func _on_player_stats_changed(strn:int, agi:int, vit:int, crit:int, points:int) -> void:
@@ -2174,13 +2403,15 @@ func _on_player_stats_changed(strn:int, agi:int, vit:int, crit:int, points:int) 
 	if btn_vit_plus:  btn_vit_plus.disabled  = not enable
 	if btn_crit_plus: btn_crit_plus.disabled = not enable
 
-	if btn_attack:
-		btn_attack.disabled = (points > 0 and stats_panel and stats_panel.visible)
+	if points > 0 and stats_panel and stats_panel.visible:
+		_set_attack_buttons_disabled(true)
+	elif turn == Turn.PLAYER:
+		_set_attack_buttons_disabled(false)
 
 	if points <= 0 and stats_panel and stats_panel.visible:
 		stats_panel.visible = false
-		if turn == Turn.PLAYER and btn_attack:
-			btn_attack.disabled = false
+		if turn == Turn.PLAYER:
+			_set_attack_buttons_disabled(false)
 	_sync_player_max_hp_from_gear()
 	_update_labels()
 	_update_unspent_points_indicator(points)
@@ -3516,8 +3747,8 @@ func _style_skill_hotbar_empty_slot() -> StyleBoxFlat:
 	if _style_skill_hotbar_empty != null:
 		return _style_skill_hotbar_empty
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.34, 0.35, 0.39, 1.0)
-	sb.border_color = Color(0.20, 0.21, 0.25, 1.0)
+	sb.bg_color = Color(0.12, 0.13, 0.16, 0.28)
+	sb.border_color = Color(0.55, 0.58, 0.65, 0.22)
 	sb.border_width_left = 1
 	sb.border_width_top = 1
 	sb.border_width_right = 1
@@ -3531,7 +3762,7 @@ func _style_skill_hotbar_empty_slot() -> StyleBoxFlat:
 	return sb
 
 
-func _clear_skill_bar_theme_overrides(btn: Button) -> void:
+func _clear_skill_bar_theme_overrides(btn: BaseButton) -> void:
 	for sn in _SKILL_BAR_STYLE_STATES:
 		btn.remove_theme_stylebox_override(sn)
 
@@ -3540,25 +3771,42 @@ func _on_skill_bar_slot_pressed(slot: int) -> void:
 	_try_use_skill(slot)
 
 
+func _collect_active_skill_slots(panel: Node) -> void:
+	skill_bar_buttons.clear()
+	skill_bar_slot_numbers.clear()
+	var entries: Array[Dictionary] = []
+	for node in panel.find_children("SkillSlot*", "BaseButton", true, false):
+		if not node is BaseButton:
+			continue
+		var suffix := String(node.name).trim_prefix("SkillSlot")
+		if not suffix.is_valid_int():
+			continue
+		entries.append({
+			"slot": int(suffix),
+			"btn": node as BaseButton,
+		})
+	entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a["slot"]) < int(b["slot"])
+	)
+	for e in entries:
+		var slot_num: int = int(e["slot"])
+		var btn: BaseButton = e["btn"] as BaseButton
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.pressed.connect(_on_skill_bar_slot_pressed.bind(slot_num))
+		skill_bar_slot_numbers.append(slot_num)
+		skill_bar_buttons.append(btn)
+
+
 func _wire_modular_skills_ui() -> void:
 	if skills_hotbar_wired:
 		return
-	var grid := get_node_or_null("CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid") as GridContainer
+	var panel := get_node_or_null("CanvasLayer/UIRoot/PanelActiveSkills")
 	var pgrid := get_node_or_null("CanvasLayer/UIRoot/PanelPassiveSkills/PassiveSkillsGrid") as GridContainer
-	if grid == null:
-		push_error("main.tscn: brak CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid — hotbar skilli nie działa.")
+	if panel == null:
+		push_error("main.tscn: brak CanvasLayer/UIRoot/PanelActiveSkills — hotbar skilli nie działa.")
 		return
-	skill_bar_buttons.clear()
 	passive_skill_slots.clear()
-	# Sloty aktywne są dynamiczne (np. 6): wykrywamy sekwencję SkillSlot1..N.
-	# Jeśli brakuje któregoś numeru po środku — zatrzymujemy, żeby nie robić dziur w indeksach slotów.
-	for slot in range(1, 33):
-		var b := grid.get_node_or_null("SkillSlot%d" % slot) as Button
-		if b == null:
-			break
-		b.focus_mode = Control.FOCUS_NONE
-		b.pressed.connect(_on_skill_bar_slot_pressed.bind(slot))
-		skill_bar_buttons.append(b)
+	_collect_active_skill_slots(panel)
 	if pgrid:
 		# Sloty pasywne też są dynamiczne (np. 4)
 		for pi in range(1, 33):
@@ -3607,23 +3855,26 @@ func _update_skills_ui() -> void:
 	if not skills_hotbar_wired or skill_bar_buttons.is_empty():
 		return
 	for idx in range(skill_bar_buttons.size()):
-		var slot: int = idx + 1
-		var btn: Button = skill_bar_buttons[idx]
+		var slot: int = skill_bar_slot_numbers[idx] if idx < skill_bar_slot_numbers.size() else (idx + 1)
+		var btn: BaseButton = skill_bar_buttons[idx]
 		if btn == null or not is_instance_valid(btn):
 			continue
 		if skills.has(slot):
 			_clear_skill_bar_theme_overrides(btn)
-			btn.flat = true
+			if btn is Button:
+				(btn as Button).flat = true
 			var sd: Dictionary = skills[slot]
 			var nm := String(sd.get("name", "—"))
 			var cd := int(skill_cooldowns.get(slot, 0))
 			var desc := String(sd.get("desc", ""))
 			btn.visible = true
 			btn.disabled = cd > 0
-			btn.icon = _skill_icon_for(nm)
-			btn.expand_icon = true
-			btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			btn.text = ""
+			if btn is Button:
+				var bbtn := btn as Button
+				bbtn.icon = _skill_icon_for(nm)
+				bbtn.expand_icon = true
+				bbtn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				bbtn.text = ""
 			var tt := "[%d] %s\n%s" % [slot, nm, desc]
 			if cd > 0:
 				tt += "\nCooldown: %d" % cd
@@ -3633,13 +3884,15 @@ func _update_skills_ui() -> void:
 			var es := _style_skill_hotbar_empty_slot()
 			for sn in _SKILL_BAR_STYLE_STATES:
 				btn.add_theme_stylebox_override(sn, es)
-			btn.flat = false
+			if btn is Button:
+				var ebtn := btn as Button
+				ebtn.flat = false
+				ebtn.icon = null
+				ebtn.text = ""
 			btn.visible = true
 			btn.disabled = true
-			btn.icon = null
-			btn.text = ""
 			btn.tooltip_text = "Skill slot %d (empty)." % slot
-			btn.modulate = Color.WHITE
+			btn.modulate = Color(1, 1, 1, 0.85)
 
 	_update_passive_skills_ui()
 

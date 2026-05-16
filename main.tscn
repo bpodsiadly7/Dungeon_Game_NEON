@@ -11,7 +11,6 @@
 [ext_resource type="Script" uid="uid://cohd4ovwrydr0" path="res://addons/dice_roller/dice_def.gd" id="8_4c57u"]
 [ext_resource type="Script" uid="uid://xsgh2gwr4gub" path="res://addons/dice_roller/dice_shape.gd" id="9_efxa6"]
 [ext_resource type="Texture2D" uid="uid://clyqlus67nx7o" path="res://ui/UI_v2.png" id="10_ycdy4"]
-[ext_resource type="Texture2D" uid="uid://ccfph4n34lgh2" path="res://ikony/sword_icon.png" id="11_sword"]
 [ext_resource type="Texture2D" uid="uid://pa510soouvt5" path="res://ikony/ring_icon.png" id="12_ring"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_lquwl"]
@@ -21,6 +20,8 @@ corner_radius_top_right = 6
 corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 corner_detail = 20
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_attack_click"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7mycd"]
 bg_color = Color(0.18717611, 0.18717617, 0.18717602, 1)
@@ -331,9 +332,9 @@ autowrap_mode = 3
 layout_mode = 1
 anchors_preset = 0
 offset_left = 194.0
-offset_top = 563.0
+offset_top = 595.0
 offset_right = 254.0
-offset_bottom = 663.0
+offset_bottom = 695.0
 scale = Vector2(0.5, 0.5)
 pivot_offset = Vector2(57.595, 113.76)
 mouse_filter = 2
@@ -357,30 +358,168 @@ stretch_mode = 5
 [node name="PanelAttack" type="Control" parent="CanvasLayer/UIRoot"]
 layout_mode = 1
 anchors_preset = 0
-offset_left = 590.0
-offset_top = 600.0
-offset_right = 635.0
-offset_bottom = 700.0
-mouse_filter = 2
+offset_left = 585.0
+offset_top = 627.0
+offset_right = 695.0
+offset_bottom = 737.0
 
-[node name="BtnAttack" type="TextureButton" parent="CanvasLayer/UIRoot/PanelAttack"]
+[node name="FrameArt" type="TextureRect" parent="CanvasLayer/UIRoot/PanelAttack"]
+visible = false
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-focus_mode = 0
-texture_normal = ExtResource("11_sword")
+mouse_filter = 2
+expand_mode = 1
 stretch_mode = 5
+
+[node name="AttackLayout" type="Control" parent="CanvasLayer/UIRoot/PanelAttack"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 58.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="HBox" type="HBoxContainer" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -58.0
+offset_top = -6.0
+offset_right = 6.0
+offset_bottom = 6.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 5
+
+[node name="ColBasic" type="Control" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+size_flags_stretch_ratio = 1.12
+
+[node name="HighlightBasic" type="ColorRect" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColBasic"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0)
+
+[node name="BtnAttack" type="Button" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColBasic"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+tooltip_text = "Basic Attack (d20)"
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/pressed = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/hover = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/disabled = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_attack_click")
+flat = true
+
+[node name="ColRight" type="VBoxContainer" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 5
+
+[node name="SlotSafe" type="Control" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="HighlightSafe" type="ColorRect" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotSafe"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -4.0
+offset_top = 1.0
+offset_bottom = 5.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0)
+
+[node name="BtnSafeAttack" type="Button" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotSafe"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -3.0
+offset_top = 2.0
+offset_right = -3.0
+grow_horizontal = 2
+grow_vertical = 2
+tooltip_text = "Safe Attack: d10 hit, d6 guard. +1 Armor until your next turn."
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/pressed = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/hover = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/disabled = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_attack_click")
+flat = true
+
+[node name="SlotWild" type="Control" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="HighlightWild" type="ColorRect" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotWild"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -6.0
+offset_right = -2.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0)
+
+[node name="BtnWildAttack" type="Button" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotWild"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -5.0
+offset_right = -2.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 2
+tooltip_text = "Wild Attack: d20 hit + d10 damage bonus. -1 Armor until your next turn."
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/pressed = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/hover = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/disabled = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_attack_click")
+flat = true
 
 [node name="PanelActiveSkills" type="Control" parent="CanvasLayer/UIRoot"]
 layout_mode = 1
 anchors_preset = 0
-offset_left = 282.0
-offset_top = 613.0
+offset_left = 284.0
+offset_top = 645.0
 offset_right = 583.0
-offset_bottom = 684.0
+offset_bottom = 716.0
 mouse_filter = 2
 
 [node name="ActiveSkillsGrid" type="GridContainer" parent="CanvasLayer/UIRoot/PanelActiveSkills"]
@@ -389,9 +528,9 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 18.0
+offset_left = 16.166656
 offset_top = 6.999976
-offset_right = 140.33331
+offset_right = 142.16666
 offset_bottom = -7.3332787
 grow_horizontal = 2
 grow_vertical = 2
@@ -424,14 +563,49 @@ layout_mode = 2
 focus_mode = 0
 flat = true
 
+[node name="ActiveSkillsGrid2" type="GridContainer" parent="CanvasLayer/UIRoot/PanelActiveSkills"]
+show_behind_parent = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 52.99999
+offset_top = 35.79998
+offset_right = 56.0
+offset_bottom = 16.79998
+grow_horizontal = 2
+grow_vertical = 2
+scale = Vector2(0.6, 0.6)
+theme_override_constants/h_separation = 73
+theme_override_constants/v_separation = 6
+columns = 6
+
+[node name="SkillSlot5" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid2"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
+[node name="SkillSlot6" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid2"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
+[node name="SkillSlot7" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid2"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
 [node name="PanelPassiveSkills" type="Control" parent="CanvasLayer/UIRoot"]
 show_behind_parent = true
 layout_mode = 1
 anchors_preset = 0
 offset_left = 731.0
-offset_top = 624.05
+offset_top = 656.0
 offset_right = 1022.24994
-offset_bottom = 664.115
+offset_bottom = 696.065
 scale = Vector2(0.8, 0.8)
 mouse_filter = 2
 
@@ -626,7 +800,7 @@ texture = ExtResource("7_4c57u")
 
 [node name="hud_bottom" type="Sprite2D" parent="CanvasLayer/UIRoot"]
 show_behind_parent = true
-position = Vector2(627.635, 368.015)
+position = Vector2(627.635, 400)
 scale = Vector2(0.35, 0.35)
 texture = ExtResource("10_ycdy4")
 

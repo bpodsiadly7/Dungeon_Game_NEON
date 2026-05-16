@@ -40,7 +40,7 @@ func _init() -> void:
 
 @onready var collider : CollisionShape3D = $Collider
 @onready var highlight_face : Node3D = $FaceHighligth
-@onready var mesh = $DiceMesh
+@onready var mesh: MeshInstance3D = $DiceMesh
 
 func _adjust_to_size():
 	mass = dice_density * dice_size**3
@@ -50,9 +50,22 @@ func _adjust_to_size():
 func _ready():
 	original_position = position
 	mesh.material_override = mesh.material_override.duplicate()
-	mesh.material_override.albedo_color = dice_color
+	_apply_dice_color_to_material()
 	_adjust_to_size()
 	stop()
+
+
+func _apply_dice_color_to_material() -> void:
+	var mat: Material = mesh.material_override
+	if mat == null:
+		return
+	if mat is StandardMaterial3D:
+		var std_mat: StandardMaterial3D = mat as StandardMaterial3D
+		std_mat.albedo_color = dice_color
+	elif mat is ShaderMaterial:
+		var shader_mat: ShaderMaterial = mat as ShaderMaterial
+		if shader_mat.shader:
+			shader_mat.set_shader_parameter("albedo_tint", dice_color)
 
 func stop():
 	dehighlight()
