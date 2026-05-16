@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3 uid="uid://di8s4oahhme5"]
+[gd_scene load_steps=19 format=3 uid="uid://di8s4oahhme5"]
 
 [ext_resource type="Script" uid="uid://bednyshjiftkh" path="res://main.gd" id="1_1bvp3"]
 [ext_resource type="Texture2D" uid="uid://b843slb3i1pcu" path="res://player_classes/dwarf_novice.png" id="2_7mycd"]
@@ -10,6 +10,7 @@
 [ext_resource type="PackedScene" uid="uid://cnlssqpge8erk" path="res://addons/dice_roller/dice_roller/dice_roller.tscn" id="7_kek77"]
 [ext_resource type="Script" uid="uid://cohd4ovwrydr0" path="res://addons/dice_roller/dice_def.gd" id="8_4c57u"]
 [ext_resource type="Script" uid="uid://xsgh2gwr4gub" path="res://addons/dice_roller/dice_shape.gd" id="9_efxa6"]
+[ext_resource type="Texture2D" uid="uid://clyqlus67nx7o" path="res://ui/UI_v2.png" id="10_ycdy4"]
 [ext_resource type="Texture2D" uid="uid://ccfph4n34lgh2" path="res://ikony/sword_icon.png" id="11_sword"]
 [ext_resource type="Texture2D" uid="uid://pa510soouvt5" path="res://ikony/ring_icon.png" id="12_ring"]
 
@@ -69,8 +70,10 @@ layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_right = 128.0
-offset_bottom = 72.0
+offset_left = -20.0
+offset_top = -24.0
+offset_right = 108.0
+offset_bottom = 48.0
 grow_horizontal = 2
 grow_vertical = 2
 
@@ -331,6 +334,8 @@ offset_left = 194.0
 offset_top = 563.0
 offset_right = 254.0
 offset_bottom = 663.0
+scale = Vector2(0.5, 0.5)
+pivot_offset = Vector2(57.595, 113.76)
 mouse_filter = 2
 
 [node name="BtnPotion" type="TextureButton" parent="CanvasLayer/UIRoot/PanelPotion"]
@@ -338,10 +343,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -47.46
-offset_top = -16.999973
-offset_right = 148.54001
-offset_bottom = 139.00003
+offset_left = -47.59502
+offset_top = -19.760033
+offset_right = 152.40498
+offset_bottom = 143.57321
 grow_horizontal = 2
 grow_vertical = 2
 scale = Vector2(0.6, 0.6)
@@ -352,9 +357,9 @@ stretch_mode = 5
 [node name="PanelAttack" type="Control" parent="CanvasLayer/UIRoot"]
 layout_mode = 1
 anchors_preset = 0
-offset_left = 1000.0
+offset_left = 590.0
 offset_top = 600.0
-offset_right = 1100.0002
+offset_right = 635.0
 offset_bottom = 700.0
 mouse_filter = 2
 
@@ -372,20 +377,26 @@ stretch_mode = 5
 [node name="PanelActiveSkills" type="Control" parent="CanvasLayer/UIRoot"]
 layout_mode = 1
 anchors_preset = 0
-offset_left = 294.27
-offset_top = 640.0
-offset_right = 742.2687
-offset_bottom = 704.0
+offset_left = 282.0
+offset_top = 613.0
+offset_right = 583.0
+offset_bottom = 684.0
 mouse_filter = 2
 
 [node name="ActiveSkillsGrid" type="GridContainer" parent="CanvasLayer/UIRoot/PanelActiveSkills"]
+show_behind_parent = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 18.0
+offset_top = 6.999976
+offset_right = 140.33331
+offset_bottom = -7.3332787
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/h_separation = 6
+scale = Vector2(0.6, 0.6)
+theme_override_constants/h_separation = 73
 theme_override_constants/v_separation = 6
 columns = 6
 
@@ -413,25 +424,15 @@ layout_mode = 2
 focus_mode = 0
 flat = true
 
-[node name="SkillSlot5" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
-custom_minimum_size = Vector2(52, 52)
-layout_mode = 2
-focus_mode = 0
-flat = true
-
-[node name="SkillSlot6" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
-custom_minimum_size = Vector2(52, 52)
-layout_mode = 2
-focus_mode = 0
-flat = true
-
 [node name="PanelPassiveSkills" type="Control" parent="CanvasLayer/UIRoot"]
+show_behind_parent = true
 layout_mode = 1
 anchors_preset = 0
-offset_left = 740.0
-offset_top = 640.0
-offset_right = 939.0001
-offset_bottom = 699.99994
+offset_left = 731.0
+offset_top = 624.05
+offset_right = 1022.24994
+offset_bottom = 664.115
+scale = Vector2(0.8, 0.8)
 mouse_filter = 2
 
 [node name="PassiveSkillsGrid" type="GridContainer" parent="CanvasLayer/UIRoot/PanelPassiveSkills"]
@@ -439,9 +440,14 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = -3.7500794
+offset_top = -1.9674988
+offset_right = 73.43753
+offset_bottom = 1.9674988
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/h_separation = 4
+scale = Vector2(0.8, 0.8)
+theme_override_constants/h_separation = 65
 theme_override_constants/v_separation = 4
 columns = 8
 
@@ -617,6 +623,12 @@ stretch_mode = 5
 show_behind_parent = true
 position = Vector2(642, 362)
 texture = ExtResource("7_4c57u")
+
+[node name="hud_bottom" type="Sprite2D" parent="CanvasLayer/UIRoot"]
+show_behind_parent = true
+position = Vector2(627.635, 368.015)
+scale = Vector2(0.35, 0.35)
+texture = ExtResource("10_ycdy4")
 
 [node name="DiceViewport" type="SubViewport" parent="."]
 transparent_bg = true
