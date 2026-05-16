@@ -92,11 +92,8 @@ var DMG_FONT: FontFile = preload("res://MedievalSharp-Bold.ttf")
 enum Turn { PLAYER, ENEMY }
 enum AttackMode { BASIC, SAFE, WILD }
 
-const SAFE_ATTACK_CRIT := 10
-const WILD_D10_DMG_PER_POINT := 0.06
-const _DICE_PAIR_LANE_X: Array[float] = [-115.0, 115.0]
-const _DICE_PAIR_ANIM_SCALE := 0.58
-const _DICE_PAIR_GAP_SEC := 0.04
+const SAFE_ATTACK_CRIT := CombatDefs.SAFE_ATTACK_CRIT
+const WILD_D10_DMG_PER_POINT := CombatDefs.WILD_D10_DMG_PER_POINT
 
 var turn: Turn = Turn.PLAYER
 var enemy_turn_delay: float = 0.6
@@ -111,6 +108,13 @@ var current_enemy_data: Dictionary = {}
 var resolving_turn: bool = false
 var _game_pause_depth: int = 0
 var _inventory_pause_active: bool = false
+
+var _dice: DicePlayback
+var _player_attacks: PlayerAttacks
+var _weapon_skills: WeaponSkills
+var _class_skills: ClassSkills
+var _skill_runtime: SkillRuntime
+var _weapon_equipment: WeaponEquipment
 
 var _heal_particles: GPUParticles2D
 
@@ -131,14 +135,11 @@ const CLASS_TEXTURES := {
 }
 
 # --- SKILLS ---
-const SKILL_COOLDOWN_TURNS := 10
-const WEAPON_SKILL_SLOT := 5
-const WEAPON_SKILL_CD_LONG := 12
-const WEAPON_SKILL_CD_BOW := 9
-## Longest-first — „crossbow” before „bow”.
-const WEAPON_ICON_NAME_KEYS := [
-	"crossbow", "dagger", "hammer", "spear", "blade", "saber", "mace", "sword", "axe", "bow",
-]
+const SKILL_COOLDOWN_TURNS := CombatDefs.SKILL_COOLDOWN_TURNS
+const WEAPON_SKILL_SLOT := CombatDefs.WEAPON_SKILL_SLOT
+const WEAPON_SKILL_CD_LONG := CombatDefs.WEAPON_SKILL_CD_LONG
+const WEAPON_SKILL_CD_BOW := CombatDefs.WEAPON_SKILL_CD_BOW
+const WEAPON_ICON_NAME_KEYS := CombatDefs.WEAPON_ICON_NAME_KEYS
 
 # slot->skill dict (na start tylko slot 1 = Power Strike)
 var skills: Dictionary = {}
@@ -320,53 +321,6 @@ const ICON_BY_TYPE := {
 	"ring2": "res://ikony/ring_icon.png",
 	"potion":    "res://ikony/potion_icon.png"
 }
-
-const WEAPON_SKILLS := {
-	"sword": {
-		"name": "Riposte",
-		"desc": "d10 attack + d6 parry. Hit: 115% dmg. d6≥5: +1 Armor. d6=6: enemy −1 Armor on your next hit.",
-	},
-	"axe": {
-		"name": "Skull Cleave",
-		"desc": "d20 strike: 145% on hit, 45% on miss. No crit.",
-	},
-	"dagger": {
-		"name": "Needle Flurry",
-		"desc": "Two d10 attacks (55% dmg each, crit on 10).",
-	},
-	"mace": {
-		"name": "Shatter Guard",
-		"desc": "d20 attack; d6 ignores up to 3 enemy Armor. Hit: 110% dmg.",
-	},
-	"spear": {
-		"name": "Lunge",
-		"desc": "d10 attack vs Armor−3. 125% dmg, crit on 10.",
-	},
-	"hammer": {
-		"name": "Earthshaker",
-		"desc": "d20 + d10: 155% on hit (+4% per d10 point); 55% on miss. No armor penalty.",
-		"cd": WEAPON_SKILL_CD_LONG,
-	},
-	"blade": {
-		"name": "Flowing Cut",
-		"desc": "d6 then d20: 2 slashes if d6≥4 (2nd at 50%, no crit).",
-	},
-	"saber": {
-		"name": "Duelist's Gambit",
-		"desc": "Roll 2× d20, use higher. 100% dmg; 19–20 = crit.",
-	},
-	"bow": {
-		"name": "Aimed Shot",
-		"desc": "d10 vs Armor−2. 120% dmg, crit on 10.",
-		"cd": WEAPON_SKILL_CD_BOW,
-	},
-	"crossbow": {
-		"name": "Overdraw",
-		"desc": "d20 hit + d10 bonus dmg (+8% per point). −1 Armor until your next action.",
-		"cd": WEAPON_SKILL_CD_LONG,
-	},
-}
-
 
 # --- ITEM BONUSY OD RZADKOŚCI ---
 const BONUS_CHANCE_RARE    := 0.6   # Rare: 60% szans na bonus +1
@@ -610,7 +564,8 @@ func _ready() -> void:
 	_apply_stats_panel_font_sizes()
 	# Attack (Basic / Safe / Wild)
 	turn = Turn.PLAYER
-	_cache_default_dice_set()
+	_init_combat_modules()
+	_dice.cache_default_dice_set()
 	_set_attack_buttons_disabled(false)
 	_wire_attack_slot_ui()
 	# Next enemy dialog
@@ -752,6 +707,16 @@ func _ready() -> void:
 	print("[DEBUG] _ready() END")
 	_ensure_unspent_points_label()
 	_update_unspent_points_indicator(player.stat_points)
+
+
+func _init_combat_modules() -> void:
+	_dice = DicePlayback.new(self)
+	_player_attacks = PlayerAttacks.new(self)
+	_weapon_skills = WeaponSkills.new(self)
+	_class_skills = ClassSkills.new(self)
+	_skill_runtime = SkillRuntime.new(self)
+	_weapon_equipment = WeaponEquipment.new(self)
+
 
 func _sync_inventory_screen_if_open() -> void:
 	if inventory_screen == null or not is_instance_valid(inventory_screen):
@@ -1239,84 +1204,19 @@ func _refresh_player_armor_label() -> void:
 
 
 func _execute_player_attack(mode: AttackMode) -> void:
-	if resolving_turn:
-		return
-	if turn != Turn.PLAYER or not player.is_alive() or not enemy.is_alive():
-		return
-
-	# Safe/Wild: bonus trwa przez turę wroga i widać go na początku twojej tury;
-	# znika dopiero gdy w tej turze wykonasz kolejny atak.
-	if player_temp_armor_delta != 0:
-		player_temp_armor_delta = 0
-		_refresh_player_armor_label()
-
-	if bool(current_enemy_data.get("treasure", false)):
-		resolving_turn = true
-		if lbl_log:
-			lbl_log.text = "You open the chest..."
-		await get_tree().create_timer(0.3).timeout
-		enemy.take_damage(enemy.hp)
-		resolving_turn = false
-		return
-
-	resolving_turn = true
-	var desc := ""
-
-	match mode:
-		AttackMode.BASIC:
-			var roll: int = randi_range(1, 20)
-			await _play_dice_roll_animation([roll], ["D20"])
-			desc = _player_attack_round_with_roll(roll)
-
-		AttackMode.SAFE:
-			var atk_roll: int = randi_range(1, 10)
-			var guard_roll: int = randi_range(1, 6)
-			await _play_dice_roll_animation(
-				[_d10_face_value(atk_roll), guard_roll],
-				["D10", "D6"]
-			)
-			player_temp_armor_delta += 1
-			_refresh_player_armor_label()
-			desc = _player_safe_attack_round(atk_roll, guard_roll)
-
-		AttackMode.WILD:
-			var d20_roll: int = randi_range(1, 20)
-			var d10_roll: int = randi_range(1, 10)
-			await _play_dice_roll_animation(
-				[d20_roll, _d10_face_value(d10_roll)],
-				["D20", "D10"]
-			)
-			player_temp_armor_delta -= 1
-			_refresh_player_armor_label()
-			var wild_mult: float = 1.0 + float(d10_roll - 1) * WILD_D10_DMG_PER_POINT
-			desc = _player_attack_round_with_roll(d20_roll, wild_mult)
-			desc += "Wild d10=%d → +%d%% dmg. Armor -1 until your next turn.\n" % [
-				d10_roll, int(round((wild_mult - 1.0) * 100.0))
-			]
-
-	if lbl_log:
-		lbl_log.text = desc
-	await get_tree().create_timer(0.1).timeout
-	if enemy.is_alive():
-		set_turn(Turn.ENEMY)
-	_tick_skill_cooldowns()
-	resolving_turn = false
+	await _player_attacks.execute_attack(mode)
 
 
-# --- Tura gracza ---
 func _player_safe_attack_round(atk_roll: int, guard_roll: int) -> String:
-	var text := "Safe Attack: d10=%d, Guard d6=%d. +1 Armor until your next turn.\n" % [atk_roll, guard_roll]
-	text += _player_attack_round_with_roll(atk_roll, 1.0, SAFE_ATTACK_CRIT)
-	return text
+	return _player_attacks.safe_attack_round(atk_roll, guard_roll)
 
 
 func _enemy_armor_for_player(armor_ignore: int = 0) -> int:
-	var base := clampi(int(current_enemy_data.get("armor", 0)), 0, 15)
-	return maxi(0, base - armor_ignore - enemy_armor_penalty)
+	return _player_attacks.enemy_armor_for_player(armor_ignore)
 
 
 func _consume_enemy_armor_penalty() -> void:
-	enemy_armor_penalty = 0
+	_player_attacks.consume_enemy_armor_penalty()
 
 
 func _player_attack_round_with_roll(
@@ -1327,75 +1227,17 @@ func _player_attack_round_with_roll(
 	allow_crit: bool = true,
 	wide_crit_from: int = -1
 ) -> String:
-	var text := ""
-	# Must be set BEFORE enemy.take_damage(), because `defeated` signal fires inside it.
-	_last_kill_context = {"roll": roll, "weapon_before": weapon.duplicate(true)}
-	var enemy_armor: int = _enemy_armor_for_player(armor_ignore)
-	_consume_enemy_armor_penalty()
-	
-	# Armor-based hit rules:
-	# roll < armor -> miss
-	# roll == armor -> half
-	# roll > armor and < crit_on -> scaled hit
-	# roll == crit_on -> crit
-	if roll < enemy_armor:
-		show_damage_popup(enemy, "dodge", "miss")
-		text += "You roll %d vs Armor %d → MISS.\n" % [roll, enemy_armor]
-		return text
+	return _player_attacks.attack_round_with_roll(
+		roll, extra_dmg_mult, crit_on, armor_ignore, allow_crit, wide_crit_from
+	)
 
-	var base_dmg: int = calc_player_weapon_damage()
-	var kind := "hit"
-	var mult := 1.0
-	var crit := false
-	if allow_crit:
-		if wide_crit_from >= 0 and roll >= wide_crit_from:
-			crit = true
-		elif roll == crit_on:
-			crit = true
-	if crit:
-		kind = "crit"
-		mult = calc_crit_multiplier()
-	elif roll == enemy_armor:
-		mult = 0.5
-	else:
-		mult = damage_multiplier_from_roll(roll, enemy_armor, crit_on - 1)
-
-	var dmg: int = max(1, int(round(float(base_dmg) * mult * extra_dmg_mult)))
-	enemy.take_damage(dmg)
-	show_damage_popup(enemy, str(dmg), kind)
-	text += "You roll %d vs Armor %d → %s for %d dmg.\n" % [
-		roll, enemy_armor, "CRIT" if crit else ("HALF" if roll == enemy_armor else "HIT"), dmg
-	]
-
-	# Barbarian lifesteal na CRIT
-	if crit and bloodlust_lifesteal > 0.0 and player.is_alive():
-		var heal = max(1, int(round(dmg * bloodlust_lifesteal)))
-		player.hp = min(player.max_hp, player.hp + heal)
-		player.emit_signal("hp_changed", player.hp, player.max_hp)
-		show_damage_popup(player, "+" + str(heal), "heal")
-
-	if not enemy.is_alive():
-		text += "Enemy defeated!"
-	return text
 
 func damage_multiplier_from_roll(roll: int, armor: int, max_non_crit: int = 19) -> float:
-	# roll is in (armor, max_non_crit)
-	var min_roll: int = clampi(armor + 1, 1, max_non_crit)
-	var max_roll: int = max_non_crit
-	if roll <= min_roll:
-		return 1.0
-	if roll >= max_roll:
-		return 1.8
-	var t := float(roll - min_roll) / float(max(1, max_roll - min_roll))
-	return lerpf(1.0, 1.8, t)
+	return _player_attacks.damage_multiplier_from_roll(roll, armor, max_non_crit)
 
 
 func _d10_face_value(roll_1_to_10: int) -> int:
-	# Model D10 w dice_roller używa ścian 0–9; 10 → 0.
-	if roll_1_to_10 >= 10:
-		return 0
-	return roll_1_to_10
-
+	return _player_attacks.d10_face_value(roll_1_to_10)
 
 
 # --- Tura przeciwnika ---
@@ -1555,7 +1397,7 @@ func _calc_player_armor_total() -> int:
 	if not equipped_armor.is_empty():
 		base = int(equipped_armor.get("armor", 0))
 	var types := []
-	for it in [equipped_armor, equipped_gloves, equipped_boots]:
+	for it in [equipped_armor, equipped_helmet, equipped_gloves, equipped_boots]:
 		if typeof(it) == TYPE_DICTIONARY and not (it as Dictionary).is_empty():
 			var t := String((it as Dictionary).get("armor_type", ""))
 			# Berserker nie daje bonusu setowego do armor — tylko flat dmg z bonuses.
@@ -2087,59 +1929,31 @@ func _on_player_level_changed(level: int, stat_points_now: int) -> void:
 	_update_unspent_points_indicator(stat_points_now)
 
 func _cache_default_dice_set() -> void:
-	if dice_roller == null or dice_roller.dice_set.is_empty():
-		return
-	_default_dice_set.clear()
-	for dd in dice_roller.dice_set:
-		if dd is DiceDef:
-			_default_dice_set.append((dd as DiceDef).duplicate(true))
+	_dice.cache_default_dice_set()
+
+
 func _apply_dice_set_shapes_on(roller: DiceRoller, shape_ids: Array[String]) -> void:
-	if roller == null:
-		return
-	var new_set: Array[DiceDef] = []
-	for sid in shape_ids:
-		var dd := DiceDef.new()
-		dd.name = sid
-		dd.shape = DiceShape.new(sid)
-		dd.color = Color(0.92, 0.88, 0.78)
-		new_set.append(dd)
-	roller.dice_set = new_set
+	_dice.apply_dice_set_shapes_on(roller, shape_ids)
 
 
 func _apply_dice_set_shapes(shape_ids: Array[String]) -> void:
-	_apply_dice_set_shapes_on(dice_roller, shape_ids)
+	_dice.apply_dice_set_shapes(shape_ids)
 
 
 func _restore_default_dice_set_on(roller: DiceRoller) -> void:
-	if roller == null:
-		return
-	if _default_dice_set.is_empty():
-		var dd := DiceDef.new()
-		dd.name = "D20"
-		dd.shape = DiceShape.new("D20")
-		roller.dice_set = [dd]
-	else:
-		roller.dice_set = _default_dice_set.duplicate(true)
+	_dice.restore_default_dice_set_on(roller)
 
 
 func _restore_default_dice_set() -> void:
-	_restore_default_dice_set_on(dice_roller)
+	_dice.restore_default_dice_set()
 
 
 func _play_d20_animation(final_roll: int) -> void:
-	await _play_legacy_dice_roll_animation([final_roll], ["D20"])
+	await _dice.play_d20_animation(final_roll)
 
 
 func _play_dice_roll_animation(faces: Array[int], shape_ids: Array[String]) -> void:
-	if not dice_display or not dice_roller:
-		return
-	if faces.is_empty() or shape_ids.is_empty() or faces.size() != shape_ids.size():
-		push_warning("Dice animation: faces/shapes mismatch.")
-		return
-	if faces.size() == 1:
-		await _play_legacy_dice_roll_animation(faces, shape_ids)
-	else:
-		await _play_multi_dice_cinematic(faces, shape_ids)
+	await _dice.play_roll_animation(faces, shape_ids)
 
 
 func _play_legacy_dice_roll_animation(
@@ -2148,84 +1962,11 @@ func _play_legacy_dice_roll_animation(
 	lane_offset_x: float = 0.0,
 	time_scale: float = 1.0
 ) -> void:
-	if not dice_display or not dice_roller:
-		return
-	time_scale = clampf(time_scale, 0.25, 1.0)
-
-	_apply_dice_set_shapes(shape_ids)
-
-	var is_crit := false
-	var is_miss := false
-	if shape_ids[0] == "D20":
-		is_crit = (faces[0] == CRIT)
-	elif shape_ids[0] == "D10":
-		is_crit = (faces[0] == 0 or faces[0] == SAFE_ATTACK_CRIT)
-
-	var rand_offset := Vector2(randf_range(-60, 60), randf_range(-30, 30))
-	var land_pos := Vector2(
-		get_viewport_rect().size.x / 2.0 - 250,
-		get_viewport_rect().size.y / 2.0 - 250
-	) + rand_offset + Vector2(lane_offset_x, 0)
-
-	dice_display.position = Vector2(-600, land_pos.y)
-	dice_display.modulate = Color(1, 1, 1, 1)
-	dice_display.visible = true
-
-	dice_display.pivot_offset = Vector2(250, 250)
-	var tw_spin := get_tree().create_tween()
-	tw_spin.tween_property(dice_display, "rotation_degrees", 360.0, 0.4 * time_scale)
-
-	var tw_in := get_tree().create_tween()
-	tw_in.set_ease(Tween.EASE_OUT)
-	tw_in.set_trans(Tween.TRANS_CUBIC)
-	tw_in.tween_property(dice_display, "position:x", land_pos.x, 0.5 * time_scale)
-
-	dice_roller.show_faces(faces)
-	await get_tree().create_timer(0.35 * time_scale).timeout
-	for dice in dice_roller.dices:
-		dice.dehighlight()
-
-	await tw_in.finished
-
-	tw_spin.kill()
-	dice_display.rotation_degrees = 0.0
-	await _dice_burst_effect(is_crit, is_miss, land_pos, time_scale)
-
-	if is_crit:
-		shake_camera(10.0, 0.2 * time_scale)
-	elif is_miss:
-		shake_camera(4.0, 0.15 * time_scale)
-
-	await get_tree().create_timer(0.8 * time_scale).timeout
-
-	var tw_out := get_tree().create_tween()
-	tw_out.set_ease(Tween.EASE_IN)
-	tw_out.set_trans(Tween.TRANS_CUBIC)
-	tw_out.tween_property(dice_display, "position:x", get_viewport_rect().size.x + 200, 0.35 * time_scale)
-	await tw_out.finished
-
-	dice_display.rotation_degrees = 0.0
-	dice_display.visible = false
-	_restore_default_dice_set()
+	await _dice.play_legacy_roll_animation(faces, shape_ids, lane_offset_x, time_scale)
 
 
 func _play_multi_dice_cinematic(faces: Array[int], shape_ids: Array[String]) -> void:
-	# Safe / Wild: dwie pełne animacje d20 jedna po drugiej.
-	for i in range(faces.size()):
-		var lane: float = 0.0
-		if i < _DICE_PAIR_LANE_X.size():
-			lane = _DICE_PAIR_LANE_X[i]
-		await _play_legacy_dice_roll_animation(
-			[faces[i]], [shape_ids[i]], lane, _DICE_PAIR_ANIM_SCALE
-		)
-		if i + 1 < faces.size():
-			await get_tree().create_timer(_DICE_PAIR_GAP_SEC).timeout
-
-# ─────────────────────────────────────────────────────────────
-# DICE BURST PARTICLES
-# Wywołaj w _play_d20_animation() po await tw_in.finished:
-#   await _dice_burst_effect(is_crit, is_miss, land_pos)
-# ─────────────────────────────────────────────────────────────
+	await _dice.play_multi_dice_cinematic(faces, shape_ids)
 
 func _dice_burst_effect(
 	is_crit: bool,
@@ -2233,214 +1974,15 @@ func _dice_burst_effect(
 	land_pos: Vector2,
 	time_scale: float = 1.0
 ) -> void:
-	var center := land_pos + Vector2(250, 250)
-	time_scale = clampf(time_scale, 0.25, 1.0)
-	var particle_speed := 1.0 / time_scale if time_scale < 1.0 else 1.0
-	var burst_px := func(cfg: Dictionary) -> void:
-		_spawn_dice_particles(center, cfg, particle_speed)
+	await _dice.dice_burst_effect(is_crit, is_miss, land_pos, time_scale)
 
-	if is_crit:
-		# Główne złote iskry — ostre i szybkie jak w FF
-		burst_px.call({
-			"amount":        60,
-			"lifetime":      0.6,
-			"explosiveness": 0.98,
-			"velocity_min":  260.0,
-			"velocity_max":  480.0,
-			"scale_min":     2.0,
-			"scale_max":     4.0,        # mniejsze = bardziej pixel-art
-			"gravity":       220.0,
-			"color_start":   Color(1.0,  1.0,  0.5,  0.9),
-			"color_end":     Color(1.0,  0.6,  0.0,  0.0),
-			"damping_min":   80.0,
-			"damping_max":   160.0,
-		})
-		# Białe mikro-iskierki — drugie pasmo
-		burst_px.call({
-			"amount":        40,
-			"lifetime":      0.4,
-			"explosiveness": 1.0,
-			"velocity_min":  180.0,
-			"velocity_max":  350.0,
-			"scale_min":     1.0,
-			"scale_max":     2.5,        # bardzo małe — pixel feel
-			"gravity":       150.0,
-			"color_start":   Color(1.0,  1.0,  1.0,  0.85),
-			"color_end":     Color(1.0,  0.9,  0.4,  0.0),
-			"damping_min":   60.0,
-			"damping_max":   100.0,
-		})
-		# Krzyżowy rozbłysk zamiast okrągłego glow
-		_spawn_dice_glow(center, Color(1.0, 0.95, 0.3, 0.7), 220.0, 0.22)
-		shake_camera(10.0, 0.18)
-
-	elif is_miss:
-		# Klasyczne JRPG miss — małe szare iskierki zamiast dymu
-		burst_px.call({
-			"amount":        18,
-			"lifetime":      0.65,
-			"explosiveness": 0.75,
-			"velocity_min":  60.0,
-			"velocity_max":  140.0,
-			"scale_min":     2.0,
-			"scale_max":     4.0,        # małe i ostre
-			"gravity":       80.0,
-			"color_start":   Color(0.8,  0.8,  0.85, 0.7),
-			"color_end":     Color(0.5,  0.5,  0.55, 0.0),
-			"damping_min":   40.0,
-			"damping_max":   80.0,
-		})
-		# Drugi layer — ciemniejsze, opadające
-		burst_px.call({
-			"amount":        12,
-			"lifetime":      0.5,
-			"explosiveness": 0.6,
-			"velocity_min":  30.0,
-			"velocity_max":  80.0,
-			"scale_min":     1.5,
-			"scale_max":     3.0,
-			"gravity":       60.0,
-			"color_start":   Color(0.55, 0.53, 0.58, 0.5),
-			"color_end":     Color(0.3,  0.3,  0.35, 0.0),
-			"damping_min":   20.0,
-			"damping_max":   50.0,
-		})
-		shake_camera(3.0, 0.10)
-
-	else:
-		# Hit — pomarańczowo-czerwony, energiczny
-		burst_px.call({
-			"amount":        35,
-			"lifetime":      0.5,
-			"explosiveness": 0.95,
-			"velocity_min":  200.0,
-			"velocity_max":  340.0,
-			"scale_min":     2.0,
-			"scale_max":     4.5,
-			"gravity":       200.0,
-			"color_start":   Color(1.0,  0.55, 0.05, 0.85),
-			"color_end":     Color(0.8,  0.2,  0.0,  0.0),
-			"damping_min":   60.0,
-			"damping_max":   110.0,
-		})
-		# Żółty rdzeń — krótki błysk
-		burst_px.call({
-			"amount":        20,
-			"lifetime":      0.3,
-			"explosiveness": 1.0,
-			"velocity_min":  100.0,
-			"velocity_max":  220.0,
-			"scale_min":     1.5,
-			"scale_max":     3.0,
-			"gravity":       120.0,
-			"color_start":   Color(1.0,  1.0,  0.6,  0.7),
-			"color_end":     Color(1.0,  0.7,  0.1,  0.0),
-			"damping_min":   40.0,
-			"damping_max":   80.0,
-		})
-		_spawn_dice_glow(center, Color(1.0, 0.6, 0.1, 0.45), 160.0, 0.16)
-
-	var wait := 0.6 if is_crit else (0.65 if is_miss else 0.5)
-	await get_tree().create_timer(wait * 0.55 * time_scale).timeout
 
 func _spawn_dice_particles(center: Vector2, cfg: Dictionary, speed_scale: float = 1.0) -> void:
-	var p := GPUParticles2D.new()
-	p.z_index      = 320
-	p.position     = center
-	p.one_shot     = true
-	p.emitting     = false
-	p.amount       = int(cfg["amount"])
-	p.lifetime     = float(cfg["lifetime"])
-	p.explosiveness = float(cfg["explosiveness"])
-	p.speed_scale  = speed_scale
-
-	var mat := ParticleProcessMaterial.new()
-	mat.emission_shape          = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	mat.emission_sphere_radius  = 18.0
-	mat.direction               = Vector3(0, 0, 0)
-	mat.spread                  = 180.0
-	mat.initial_velocity_min    = float(cfg["velocity_min"])
-	mat.initial_velocity_max    = float(cfg["velocity_max"])
-	mat.gravity                 = Vector3(0, float(cfg["gravity"]), 0)
-	mat.damping_min             = float(cfg["damping_min"])
-	mat.damping_max             = float(cfg["damping_max"])
-	mat.scale_min               = float(cfg["scale_min"])
-	mat.scale_max               = float(cfg["scale_max"])
-	mat.angle_min               = 0.0
-	mat.angle_max               = 360.0
-	mat.angular_velocity_min    = -180.0
-	mat.angular_velocity_max    =  180.0
-
-	# Gradient koloru: start → end (fade out)
-	var grad := Gradient.new()
-	grad.set_color(0, cfg["color_start"] as Color)
-	grad.add_point(1.0, cfg["color_end"] as Color)
-	var grad_tex := GradientTexture1D.new()
-	grad_tex.gradient = grad
-	mat.color_ramp = grad_tex
-
-	p.process_material = mat
-
-	# Tekstura — mały okrąg (rozmyty)
-	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
-	img.fill(Color(0, 0, 0, 0))
-	for x in 16:
-		for y in 16:
-			var dx: float = x - 7.5
-			var dy: float = y - 7.5
-			var dist: float = sqrt(dx*dx + dy*dy)
-			var alpha: float = clamp(1.0 - dist / 7.5, 0.0, 1.0)
-			alpha = alpha * alpha  # miękka krawędź
-			img.set_pixel(x, y, Color(1, 1, 1, alpha))
-	var tex := ImageTexture.create_from_image(img)
-	p.texture = tex
-
-	$CanvasLayer.add_child(p)
-	p.emitting = true
-
-	# Auto-usuń po zakończeniu
-	var cleanup_time: float = float(cfg["lifetime"]) + 0.3
-	get_tree().create_timer(cleanup_time).timeout.connect(func():
-		if is_instance_valid(p): p.queue_free()
-	)
+	_dice.spawn_dice_particles(center, cfg, speed_scale)
 
 
 func _spawn_dice_glow(center: Vector2, col: Color, radius: float, duration: float) -> void:
-	# Centralny rozbłysk — okrąg który szybko wybucha i znika
-	var glow := ColorRect.new()
-	glow.color        = col
-	glow.size         = Vector2(radius, radius)
-	glow.position     = center - Vector2(radius * 0.5, radius * 0.5)
-	glow.pivot_offset = Vector2(radius * 0.5, radius * 0.5)
-	glow.scale        = Vector2(0.1, 0.1)
-	glow.z_index      = 315
-
-	# Zaokrąglony wygląd przez shader
-	var shader_code := """
-shader_type canvas_item;
-void fragment() {
-	vec2 uv = UV - vec2(0.5);
-	float dist = length(uv);
-	float alpha = smoothstep(0.5, 0.2, dist);
-	COLOR = vec4(COLOR.rgb, COLOR.a * alpha);
-}
-"""
-	var shader := Shader.new()
-	shader.code = shader_code
-	var shader_mat := ShaderMaterial.new()
-	shader_mat.shader = shader
-	glow.material = shader_mat
-
-	$CanvasLayer.add_child(glow)
-
-	# Pop-in → fade-out
-	var tw := get_tree().create_tween()
-	tw.tween_property(glow, "scale", Vector2(1.0, 1.0), duration * 0.3)\
-		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
-	tw.tween_property(glow, "modulate:a", 0.0, duration * 0.7)\
-		.set_trans(Tween.TRANS_QUAD)
-	tw.tween_callback(glow.queue_free)
-
+	_dice.spawn_dice_glow(center, col, radius, duration)
 
 
 # _offer_branch_after_lich() -- usunięta (martwy kod; zastąpiona przez _offer_branch_choice_after_boss)
@@ -3353,44 +2895,15 @@ func _unequip_item(key: String) -> void:
 	_sync_inventory_screen_if_open()
 
 func _weapon_form_from_name(item_name: String) -> String:
-	var n := item_name.to_lower()
-	if n == "unarmed" or n == "":
-		return ""
-	for k in WEAPON_ICON_NAME_KEYS:
-		if k in n:
-			return k
-	return ""
+	return _weapon_equipment.form_from_name(item_name)
 
 
 func _weapon_form_from_item(it: Dictionary) -> String:
-	return _weapon_form_from_name(String(it.get("name", "")))
+	return _weapon_equipment.form_from_item(it)
 
 
 func _refresh_weapon_skill() -> void:
-	var form := _weapon_form_from_item(weapon)
-	if skills.has(WEAPON_SKILL_SLOT) and String(skills[WEAPON_SKILL_SLOT].get("source", "")) == "weapon":
-		skills.erase(WEAPON_SKILL_SLOT)
-	if form == "":
-		# Zachowaj cooldown slotu 5 (anty-exploit: zdejmij broń → załóż inną).
-		_update_skills_ui()
-		return
-	var def: Dictionary = WEAPON_SKILLS.get(form, {})
-	if def.is_empty():
-		_update_skills_ui()
-		return
-	skills[WEAPON_SKILL_SLOT] = {
-		"key": "weapon_skill",
-		"weapon_form": form,
-		"name": String(def.get("name", "Weapon Skill")),
-		"type": "active",
-		"desc": String(def.get("desc", "")),
-		"source": "weapon",
-		"icon_key": form,
-	}
-	# Cooldown tylko przy pierwszym użyciu slotu w runie — nigdy przy wymianie broni.
-	if not skill_cooldowns.has(WEAPON_SKILL_SLOT):
-		skill_cooldowns[WEAPON_SKILL_SLOT] = 0
-	_update_skills_ui()
+	_weapon_equipment.refresh_weapon_skill()
 
 
 func _skill_icon_texture_for(sd: Dictionary) -> Texture2D:
@@ -4195,44 +3708,8 @@ func _try_use_skill(slot:int) -> void:
 
 
 
-func _skill_power_strike(slot:int) -> void:
-	# Gwarantowany krytyk kosztem 10% bieżącego HP
-	resolving_turn = true
-
-	var cost = max(1, int(ceil(player.hp * 0.10)))
-	player.hp = max(1, player.hp - cost)
-	player.emit_signal("hp_changed", player.hp, player.max_hp)
-	show_damage_popup(player, "-%d HP" % cost, "hit")
-
-	await get_tree().create_timer(0.12).timeout
-
-	var base_dmg: int = calc_player_weapon_damage()
-	var dmg := int(round(float(base_dmg) * calc_crit_multiplier_safe()))
-	_last_kill_context = {"roll": CRIT, "weapon_before": weapon.duplicate(true)}
-	enemy.take_damage(dmg)
-	show_damage_popup(enemy, str(dmg), "crit")
-	if lbl_log:
-		lbl_log.text = "Power Strike! Guaranteed CRIT for %d dmg (HP cost %d)." % [dmg, cost]
-
-	# Barbarian lifesteal na CRIT
-	if bloodlust_lifesteal > 0.0 and player.is_alive():
-		var heal = max(1, int(round(dmg * bloodlust_lifesteal)))
-		player.hp = min(player.max_hp, player.hp + heal)
-		player.emit_signal("hp_changed", player.hp, player.max_hp)
-		show_damage_popup(player, "+" + str(heal), "heal")
-
-	# ustaw cooldown
-	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
-	_update_skills_ui()
-
-	await get_tree().create_timer(0.1).timeout
-
-	if enemy.is_alive():
-		set_turn(Turn.ENEMY)
-	_tick_skill_cooldowns()
-	resolving_turn = false
-
-
+func _skill_power_strike(slot: int) -> void:
+	await _class_skills.power_strike(slot)
 
 
 # drobny „bezpiecznik”: jeśli w przyszłości coś zepsuje naszyjnik/crit mult
@@ -4250,330 +3727,32 @@ func calc_crit_multiplier_safe() -> float:
 	return m
 
 
-func _skill_basic_strike(slot:int) -> void:
-	# 120% obrażeń broni; kończy turę; standardowy CD
-	resolving_turn = true
+func _skill_basic_strike(slot: int) -> void:
+	await _class_skills.basic_strike(slot)
 
-	var base_dmg: int = calc_player_weapon_damage()
-	var dmg := int(round(float(base_dmg) * 1.2))
-	_last_kill_context = {"roll": -1, "weapon_before": weapon.duplicate(true)}
-	enemy.take_damage(dmg)
-	show_damage_popup(enemy, str(dmg), "hit")
-	if lbl_log:
-		lbl_log.text = "Basic Strike for %d dmg." % dmg
 
-	# cooldown
-	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
-	_update_skills_ui()
+func _skill_quick_slash(slot: int) -> void:
+	await _class_skills.quick_slash(slot)
 
-	await get_tree().create_timer(0.1).timeout
-	if enemy.is_alive():
-		set_turn(Turn.ENEMY)
-	_tick_skill_cooldowns()
-	resolving_turn = false
 
-func _skill_quick_slash(slot:int) -> void:
-	# Dwa szybkie ciosy: każdy 60%–100% bazowych obrażeń broni
-	resolving_turn = true
+func _skill_shield_block(slot: int) -> void:
+	await _class_skills.shield_block(slot)
 
-	var base: int = calc_player_weapon_damage()
-	var h1 = max(1, int(round(base * randf_range(0.60, 1.00))))
-	var h2 = max(1, int(round(base * randf_range(0.60, 1.00))))
-	var total = h1 + h2
 
-	_last_kill_context = {"roll": -1, "weapon_before": weapon.duplicate(true)}
-	enemy.take_damage(h1)
-	show_damage_popup(enemy, str(h1), "hit")
-	await get_tree().create_timer(0.05).timeout
-	if enemy.is_alive():
-		enemy.take_damage(h2)
-		show_damage_popup(enemy, str(h2), "hit")
-
-	if lbl_log:
-		lbl_log.text = "Quick Slash! %d + %d = %d dmg." % [h1, h2, total]
-
-	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
-	_update_skills_ui()
-
-	await get_tree().create_timer(0.1).timeout
-	if enemy.is_alive():
-		set_turn(Turn.ENEMY)
-	_tick_skill_cooldowns()
-	resolving_turn = false
-
-func _skill_shield_block(slot:int) -> void:
-	# Następny otrzymany cios zostanie w 100% zablokowany
-	resolving_turn = true
-	shield_active = true
-	if lbl_log:
-		lbl_log.text = "Shield raised! Next incoming hit will be BLOCKED."
-	show_damage_popup(player, "SHIELD", "heal")
-
-	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
-	_update_skills_ui()
-
-	await get_tree().create_timer(0.1).timeout
-	# kończy turę gracza normalnie
-	if enemy.is_alive():
-		set_turn(Turn.ENEMY)
-	_tick_skill_cooldowns()
-	resolving_turn = false
-
-func _skill_fury(slot:int) -> void:
-	# Barbarian: Fury = wykonaj DWA ataki z rzędu (pomijamy turę wroga tylko raz – po dwóch ciosach wróg normalnie atakuje)
-	resolving_turn = true
-
-	var log_prefix := "Fury"
-	var _hits_done := 0
-
-	for i in range(2): # dwa uderzenia
-		if not player.is_alive() or not enemy.is_alive():
-			break
-		var roll:int = randi_range(1, 20)
-		# Możesz pominąć animację, jeśli chcesz szybszy skill — ja zostawiam, żeby było spójnie:
-		await _play_d20_animation(roll)
-		var desc := _player_attack_round_with_roll(roll)
-		_hits_done += 1
-
-		# podbij log — pokazujemy który to cios z dwóch
-		if lbl_log:
-			lbl_log.text = "%s: strike %d/2\n%s" % [log_prefix, i+1, desc]
-
-		# krótka pauza między ciosami
-		await get_tree().create_timer(0.08).timeout
-
-		# jeśli wróg padł po pierwszym — kończymy pętlę
-		if not enemy.is_alive():
-			break
-
-	# ustaw cooldown na slocie, z którego użyto skilla
-	skill_cooldowns[slot] = SKILL_COOLDOWN_TURNS
-	_update_skills_ui()
-
-	# mała pauza kosmetyczna
-	await get_tree().create_timer(0.1).timeout
-
-	# po dwóch ciosach przekazujemy turę wrogowi (jeśli żyje)
-	if enemy.is_alive():
-		set_turn(Turn.ENEMY)
-
-	# jak po zwykłym ataku – odlicz CD o turę
-	_tick_skill_cooldowns()
-	resolving_turn = false
+func _skill_fury(slot: int) -> void:
+	await _class_skills.fury(slot)
 
 
 func _weapon_skill_cd_for(slot: int) -> int:
-	var form := String(skills.get(slot, {}).get("weapon_form", ""))
-	var def: Dictionary = WEAPON_SKILLS.get(form, {})
-	return int(def.get("cd", SKILL_COOLDOWN_TURNS))
+	return _skill_runtime.weapon_skill_cd_for(slot)
 
 
 func _finish_active_skill_turn(slot: int, cd_turns: int = -1) -> void:
-	if cd_turns < 0:
-		cd_turns = _weapon_skill_cd_for(slot) if slot == WEAPON_SKILL_SLOT else SKILL_COOLDOWN_TURNS
-	skill_cooldowns[slot] = cd_turns
-	_update_skills_ui()
-	await get_tree().create_timer(0.1).timeout
-	if enemy.is_alive():
-		set_turn(Turn.ENEMY)
-	_tick_skill_cooldowns()
-	resolving_turn = false
+	await _skill_runtime.finish_active_skill_turn(slot, cd_turns)
 
 
 func _use_weapon_skill(slot: int) -> void:
-	if not skills.has(slot):
-		return
-	var form := String(skills[slot].get("weapon_form", ""))
-	resolving_turn = true
-	match form:
-		"sword":
-			await _ws_riposte(slot)
-		"axe":
-			await _ws_skull_cleave(slot)
-		"dagger":
-			await _ws_needle_flurry(slot)
-		"mace":
-			await _ws_shatter_guard(slot)
-		"spear":
-			await _ws_lunge(slot)
-		"hammer":
-			await _ws_earthshaker(slot)
-		"blade":
-			await _ws_flowing_cut(slot)
-		"saber":
-			await _ws_duelist_gambit(slot)
-		"bow":
-			await _ws_aimed_shot(slot)
-		"crossbow":
-			await _ws_overdraw(slot)
-		_:
-			if lbl_log:
-				lbl_log.text = "Unknown weapon skill."
-			resolving_turn = false
-
-
-func _ws_riposte(slot: int) -> void:
-	var atk_roll: int = randi_range(1, 10)
-	var guard_roll: int = randi_range(1, 6)
-	await _play_dice_roll_animation([_d10_face_value(atk_roll), guard_roll], ["D10", "D6"])
-	var log := "Riposte: d10=%d, d6=%d.\n" % [atk_roll, guard_roll]
-	log += _player_attack_round_with_roll(atk_roll, 1.15, SAFE_ATTACK_CRIT)
-	if guard_roll >= 5:
-		player_temp_armor_delta += 1
-		_refresh_player_armor_label()
-		log += "+1 Armor until your next action.\n"
-	if guard_roll == 6:
-		enemy_armor_penalty = 1
-		log += "Enemy Armor −1 on your next hit.\n"
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot)
-
-
-func _ws_skull_cleave(slot: int) -> void:
-	var roll: int = randi_range(1, 20)
-	await _play_dice_roll_animation([roll], ["D20"])
-	_last_kill_context = {"roll": roll, "weapon_before": weapon.duplicate(true)}
-	var enemy_armor: int = _enemy_armor_for_player()
-	_consume_enemy_armor_penalty()
-	var base_dmg: int = calc_player_weapon_damage()
-	var log := "Skull Cleave: d20=%d vs Armor %d.\n" % [roll, enemy_armor]
-	if roll >= enemy_armor:
-		var dmg: int = maxi(1, int(round(float(base_dmg) * 1.45)))
-		enemy.take_damage(dmg)
-		show_damage_popup(enemy, str(dmg), "hit")
-		log += "Hit for %d dmg (145%%).\n" % dmg
-	else:
-		var dmg: int = maxi(1, int(round(float(base_dmg) * 0.45)))
-		enemy.take_damage(dmg)
-		show_damage_popup(enemy, str(dmg), "hit")
-		log += "Glancing blow for %d dmg (45%%).\n" % dmg
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot)
-
-
-func _ws_needle_flurry(slot: int) -> void:
-	var r1: int = randi_range(1, 10)
-	var r2: int = randi_range(1, 10)
-	await _play_dice_roll_animation([_d10_face_value(r1), _d10_face_value(r2)], ["D10", "D10"])
-	var log := "Needle Flurry:\n"
-	log += _player_attack_round_with_roll(r1, 0.55, SAFE_ATTACK_CRIT)
-	if enemy.is_alive():
-		log += _player_attack_round_with_roll(r2, 0.55, SAFE_ATTACK_CRIT)
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot)
-
-
-func _ws_shatter_guard(slot: int) -> void:
-	var roll: int = randi_range(1, 20)
-	var crush: int = randi_range(1, 6)
-	await _play_dice_roll_animation([roll, crush], ["D20", "D6"])
-	var ignore: int = int(ceil(float(crush) / 2.0))
-	var log := "Shatter Guard: d20=%d, d6=%d (ignore %d Armor).\n" % [roll, crush, ignore]
-	log += _player_attack_round_with_roll(roll, 1.10, CRIT, ignore)
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot)
-
-
-func _ws_lunge(slot: int) -> void:
-	var roll: int = randi_range(1, 10)
-	await _play_dice_roll_animation([_d10_face_value(roll)], ["D10"])
-	var log := "Lunge: d10=%d (Armor−3).\n" % roll
-	log += _player_attack_round_with_roll(roll, 1.25, SAFE_ATTACK_CRIT, 3)
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot)
-
-
-func _ws_earthshaker(slot: int) -> void:
-	var d20_roll: int = randi_range(1, 20)
-	var d10_roll: int = randi_range(1, 10)
-	await _play_dice_roll_animation([d20_roll, _d10_face_value(d10_roll)], ["D20", "D10"])
-	_last_kill_context = {"roll": d20_roll, "weapon_before": weapon.duplicate(true)}
-	var enemy_armor: int = _enemy_armor_for_player()
-	_consume_enemy_armor_penalty()
-	var base_dmg: int = calc_player_weapon_damage()
-	var log := "Earthshaker: d20=%d, d10=%d vs Armor %d.\n" % [d20_roll, d10_roll, enemy_armor]
-	if d20_roll >= enemy_armor:
-		var bonus: float = 1.0 + float(d10_roll - 1) * 0.04
-		var dmg: int = maxi(1, int(round(float(base_dmg) * 1.55 * bonus)))
-		var crit: bool = (d20_roll == CRIT)
-		var kind: String = "crit" if crit else "hit"
-		if crit:
-			dmg = max(1, int(round(float(dmg) * calc_crit_multiplier())))
-		enemy.take_damage(dmg)
-		show_damage_popup(enemy, str(dmg), kind)
-		log += "Hit for %d dmg.\n" % dmg
-	else:
-		var dmg: int = maxi(1, int(round(float(base_dmg) * 0.55)))
-		enemy.take_damage(dmg)
-		show_damage_popup(enemy, str(dmg), "hit")
-		log += "Shockwave for %d dmg (55%%).\n" % dmg
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot, WEAPON_SKILL_CD_LONG)
-
-
-func _ws_flowing_cut(slot: int) -> void:
-	var flow: int = randi_range(1, 6)
-	var roll: int = randi_range(1, 20)
-	await _play_dice_roll_animation([flow, roll], ["D6", "D20"])
-	var two_slash := flow >= 4
-	var log := "Flowing Cut: d6=%d → %s.\n" % [flow, "2 slashes" if two_slash else "1 slash"]
-	log += _player_attack_round_with_roll(roll, 1.0, CRIT)
-	if two_slash and enemy.is_alive():
-		var roll2: int = randi_range(1, 20)
-		await _play_dice_roll_animation([roll2], ["D20"])
-		log += _player_attack_round_with_roll(roll2, 0.5, CRIT, 0, false)
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot)
-
-
-func _ws_duelist_gambit(slot: int) -> void:
-	var r1: int = randi_range(1, 20)
-	var r2: int = randi_range(1, 20)
-	await _play_dice_roll_animation([r1, r2], ["D20", "D20"])
-	var roll: int = maxi(r1, r2)
-	var log := "Duelist's Gambit: d20 %d & %d → use %d.\n" % [r1, r2, roll]
-	log += _player_attack_round_with_roll(roll, 1.0, CRIT, 0, true, 19)
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot)
-
-
-func _ws_aimed_shot(slot: int) -> void:
-	var roll: int = randi_range(1, 10)
-	await _play_dice_roll_animation([_d10_face_value(roll)], ["D10"])
-	var log := "Aimed Shot: d10=%d (Armor−2).\n" % roll
-	log += _player_attack_round_with_roll(roll, 1.20, SAFE_ATTACK_CRIT, 2)
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot, WEAPON_SKILL_CD_BOW)
-
-
-func _ws_overdraw(slot: int) -> void:
-	var d20_roll: int = randi_range(1, 20)
-	var d10_roll: int = randi_range(1, 10)
-	await _play_dice_roll_animation([d20_roll, _d10_face_value(d10_roll)], ["D20", "D10"])
-	player_temp_armor_delta -= 1
-	_refresh_player_armor_label()
-	var enemy_armor: int = _enemy_armor_for_player()
-	var log := "Overdraw: d20=%d, d10=%d vs Armor %d. Armor −1 until your next action.\n" % [
-		d20_roll, d10_roll, enemy_armor
-	]
-	log += _player_attack_round_with_roll(d20_roll, 1.0, CRIT)
-	if d20_roll >= enemy_armor and enemy.is_alive() and d10_roll > 0:
-		var bonus_dmg: int = maxi(1, int(round(float(calc_player_weapon_damage()) * 0.08 * float(d10_roll))))
-		enemy.take_damage(bonus_dmg)
-		show_damage_popup(enemy, str(bonus_dmg), "hit")
-		log += "Overdraw burst +%d dmg.\n" % bonus_dmg
-	if lbl_log:
-		lbl_log.text = log
-	await _finish_active_skill_turn(slot, WEAPON_SKILL_CD_LONG)
+	await _weapon_skills.use(slot)
 
 
 func _grant_class_skills(class_key: String) -> void:

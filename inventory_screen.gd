@@ -461,7 +461,7 @@ func _calc_total_armor() -> int:
 	if not armor_item.is_empty():
 		base = int(armor_item.get("armor", 0))
 	var types: Array[String] = []
-	for k in ["armor", "gloves", "boots"]:
+	for k in ["armor", "helmet", "gloves", "boots"]:
 		var it: Dictionary = equipped.get(k, {})
 		if not it.is_empty():
 			var t := String(it.get("armor_type", ""))
@@ -757,8 +757,43 @@ func _show_item_details(item: Dictionary, slot_key: String, from_hover: bool, id
 	_item_stats.text = lines
 	_showing_hover_details = from_hover and idx != selected_idx
 
+func _bonus_weapon_dmg_from_item(item: Dictionary) -> int:
+	return int(item.get("bonuses", {}).get("weapon_dmg", 0))
+
+
+func _append_item_bonus_lines(lines: String, totals: Dictionary) -> String:
+	for key in ["str", "agi", "vit", "crit"]:
+		var v := int(totals.get(key, 0))
+		if v != 0:
+			lines += "\nBonus: %+d %s" % [v, key.to_upper()]
+	var wdmg := int(totals.get("weapon_dmg", 0))
+	if wdmg != 0:
+		lines += "\nFlat DMG: %+d" % wdmg
+	return lines
+
+
+func _item_bonus_totals(item: Dictionary, slot_key: String) -> Dictionary:
+	var totals: Dictionary = {}
+	var bonuses: Dictionary = item.get("bonuses", {})
+	if not bonuses.is_empty():
+		for k in bonuses.keys():
+			totals[String(k)] = int(bonuses.get(k, 0))
+	var bonus_stat: String = str(item.get("bonus_stat", ""))
+	var bonus_value: int = int(item.get("bonus_value", 0))
+	var bonus_stat2: String = str(item.get("bonus_stat2", ""))
+	var bonus_value2: int = int(item.get("bonus_value2", 0))
+	if bonus_stat != "" and bonus_value != 0 and slot_key != "necklace":
+		var k1 := bonus_stat.to_lower()
+		totals[k1] = int(totals.get(k1, 0)) + bonus_value
+	if bonus_stat2 != "" and bonus_value2 != 0 and slot_key != "necklace":
+		var k2 := bonus_stat2.to_lower()
+		totals[k2] = int(totals.get(k2, 0)) + bonus_value2
+	return totals
+
+
 func _build_item_description(item: Dictionary, slot_key: String) -> String:
 	var lines := "Slot: %s" % slot_key.capitalize()
+	var armor_type := String(item.get("armor_type", ""))
 	match slot_key:
 		"weapon":
 			lines += "\nDMG base: %d" % int(item.get("base", 0))
@@ -768,48 +803,25 @@ func _build_item_description(item: Dictionary, slot_key: String) -> String:
 				for k in scale_dict:
 					s += "  %s×%.1f" % [k.to_upper(), float(scale_dict[k])]
 				lines += "\nScaling:%s" % s
-			var bdict: Dictionary = item.get("bonuses", {})
-			if not bdict.is_empty() and int(bdict.get("weapon_dmg", 0)) != 0:
-				lines += "\nFlat DMG: %+d" % int(bdict.get("weapon_dmg", 0))
 		"armor":
 			if item.has("armor"):
 				lines += "\nArmor: %d" % int(item.get("armor", 0))
 			else:
 				lines += "\nDamage Reduction: %.0f%%" % (float(item.get("dr", 0)) * 100)
-			if String(item.get("armor_type", "")) != "":
-				lines += "\nType: %s" % String(item.get("armor_type", "")).capitalize()
 		"helmet":
 			lines += "\nHP Bonus: +%d" % int(item.get("hp_bonus", 0))
-			if String(item.get("armor_type", "")) != "":
-				lines += "\nType: %s" % String(item.get("armor_type", "")).capitalize()
 		"necklace":
-			lines += "\nBonus: %s" % str(item.get("bonus_stat", "—")).to_upper()
-		"gloves", "boots":
-			if String(item.get("armor_type", "")) != "":
-				lines += "\nType: %s" % String(item.get("armor_type", "")).capitalize()
+			lines += "\nCrit mult: +%.0f%%" % (float(item.get("crit_bonus", 0.0)) * 100.0)
+			lines += "\nBonus stat: %s" % str(item.get("bonus_stat", "—")).to_upper()
 		"ring1", "ring2":
 			lines += "\nSkill: %s" % String(item.get("skill_id", "—"))
-	var bonus_stat: String = str(item.get("bonus_stat", ""))
-	var bonus_value: int   = int(item.get("bonus_value", 0))
-	var bonus_stat2: String = str(item.get("bonus_stat2", ""))
-	var bonus_value2: int   = int(item.get("bonus_value2", 0))
-	var totals: Dictionary = {}
-	var bonuses: Dictionary = item.get("bonuses", {})
-	if not bonuses.is_empty():
-		for k in bonuses.keys():
-			totals[String(k)] = int(bonuses.get(k, 0))
-	# merge legacy into totals (so each stat shows once)
-	if bonus_stat != "" and bonus_value != 0 and slot_key != "necklace":
-		var k1 := bonus_stat.to_lower()
-		totals[k1] = int(totals.get(k1, 0)) + bonus_value
-	if bonus_stat2 != "" and bonus_value2 != 0 and slot_key != "necklace":
-		var k2 := bonus_stat2.to_lower()
-		totals[k2] = int(totals.get(k2, 0)) + bonus_value2
-
-	for key in ["str", "agi", "vit", "crit"]:
-		var v := int(totals.get(key, 0))
-		if v != 0:
-			lines += "\nBonus: %+d %s" % [v, key.to_upper()]
+	if armor_type != "" and slot_key in ["armor", "helmet", "gloves", "boots"]:
+		lines += "\nType: %s" % armor_type.capitalize()
+		if armor_type != "berserker":
+			lines += "\n(Set bonus: counts toward light/medium/heavy)"
+		else:
+			lines += "\n(No armor set bonus — adds flat damage)"
+	lines = _append_item_bonus_lines(lines, _item_bonus_totals(item, slot_key))
 	if bool(item.get("permanent", false)):
 		lines += "\n★ PERMANENT"
 	return lines
@@ -843,6 +855,11 @@ func _build_compare_block(candidate: Dictionary, equipped_item: Dictionary, slot
 				str(equipped_item.get("bonus_stat", "—")).to_upper(),
 				str(candidate.get("bonus_stat", "—")).to_upper()
 			]
+	if slot_key in ["armor", "helmet", "gloves", "boots"]:
+		var cand_wd := _bonus_weapon_dmg_from_item(candidate)
+		var eq_wd := _bonus_weapon_dmg_from_item(equipped_item)
+		if cand_wd != 0 or eq_wd != 0:
+			cmp_lines += "\nFlat DMG: %d (%s)" % [cand_wd, _fmt_delta(cand_wd - eq_wd, false)]
 	var cand_bonus_value := int(candidate.get("bonus_value", 0))
 	var eq_bonus_value := int(equipped_item.get("bonus_value", 0))
 	if str(candidate.get("bonus_stat", "")) != "":
