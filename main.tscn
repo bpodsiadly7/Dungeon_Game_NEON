@@ -9,8 +9,8 @@
 [ext_resource type="Texture2D" uid="uid://ct8l8cggkpdhq" path="res://ui/hud_prototype.png" id="7_4c57u"]
 [ext_resource type="PackedScene" uid="uid://cnlssqpge8erk" path="res://addons/dice_roller/dice_roller/dice_roller.tscn" id="7_kek77"]
 [ext_resource type="Script" uid="uid://cohd4ovwrydr0" path="res://addons/dice_roller/dice_def.gd" id="8_4c57u"]
+[ext_resource type="Texture2D" uid="uid://cwobhtu3vg3cl" path="res://ui/UI_v3.png" id="9_dg77c"]
 [ext_resource type="Script" uid="uid://xsgh2gwr4gub" path="res://addons/dice_roller/dice_shape.gd" id="9_efxa6"]
-[ext_resource type="Texture2D" uid="uid://clyqlus67nx7o" path="res://ui/UI_v2.png" id="10_ycdy4"]
 [ext_resource type="Texture2D" uid="uid://pa510soouvt5" path="res://ikony/ring_icon.png" id="12_ring"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_lquwl"]
@@ -412,6 +412,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = -7.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
@@ -422,6 +426,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 5.0
+offset_top = 6.0
+offset_right = -5.0
+offset_bottom = -6.0
 grow_horizontal = 2
 grow_vertical = 2
 tooltip_text = "Basic Attack (d20)"
@@ -449,9 +457,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -4.0
-offset_top = 1.0
-offset_bottom = 5.0
+offset_left = -3.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = -1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
@@ -463,8 +472,8 @@ anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -3.0
-offset_top = 2.0
-offset_right = -3.0
+offset_top = 6.0
+offset_right = -6.0
 grow_horizontal = 2
 grow_vertical = 2
 tooltip_text = "Safe Attack: d10 hit, d6 guard. +1 Armor until your next turn."
@@ -486,9 +495,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -6.0
-offset_right = -2.0
-offset_bottom = -3.0
+offset_left = -3.0
+offset_top = 2.0
+offset_right = -6.0
+offset_bottom = -6.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
@@ -499,9 +509,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -5.0
-offset_right = -2.0
-offset_bottom = -3.0
+offset_left = -3.0
+offset_top = 2.0
+offset_right = -6.0
+offset_bottom = -6.0
 grow_horizontal = 2
 grow_vertical = 2
 tooltip_text = "Wild Attack: d20 hit + d10 damage bonus. -1 Armor until your next turn."
@@ -802,7 +813,7 @@ texture = ExtResource("7_4c57u")
 show_behind_parent = true
 position = Vector2(627.635, 400)
 scale = Vector2(0.35, 0.35)
-texture = ExtResource("10_ycdy4")
+texture = ExtResource("9_dg77c")
 
 [node name="DiceViewport" type="SubViewport" parent="."]
 transparent_bg = true

@@ -433,8 +433,9 @@ func _on_close() -> void:
 	closed.emit()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not visible: return
-	if event.is_action_pressed("ui_cancel"):
+	if not visible:
+		return
+	if event.is_action_pressed("toggle_inventory") or event.is_action_pressed("ui_cancel"):
 		_on_close()
 		get_viewport().set_input_as_handled()
 

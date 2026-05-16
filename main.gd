@@ -22,9 +22,17 @@ extends Node2D
 	"CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotWild/HighlightWild"
 ) as ColorRect
 
-const _ATTACK_SLOT_HIGHLIGHT_OFF := Color(0, 0, 0, 0)
-const _ATTACK_SLOT_HIGHLIGHT_HOVER := Color(1.0, 0.88, 0.38, 0.42)
-const _ATTACK_SLOT_HIGHLIGHT_PRESS := Color(1.0, 0.96, 0.58, 0.58)
+const _ATTACK_SLOT_HIGHLIGHT_SHADER := preload("res://ui/attack_slot_highlight.gdshader")
+const _ATTACK_SLOT_HIGHLIGHT_ACCENT_BASIC := Color(0.88, 0.94, 1.0, 1.0)
+const _ATTACK_SLOT_HIGHLIGHT_ACCENT_SAFE := Color(0.78, 1.0, 0.86, 1.0)
+const _ATTACK_SLOT_HIGHLIGHT_ACCENT_WILD := Color(1.0, 0.78, 0.72, 1.0)
+const _ATTACK_SLOT_HIGHLIGHT_STRENGTH_HOVER := 0.92
+const _ATTACK_SLOT_HIGHLIGHT_STRENGTH_PRESS := 1.18
+const _ATTACK_SLOT_HIGHLIGHT_HOVER_SCALE := Vector2(1.03, 1.04)
+const _ATTACK_SLOT_HIGHLIGHT_TWEEN_IN := 0.12
+const _ATTACK_SLOT_HIGHLIGHT_TWEEN_OUT := 0.2
+
+var _attack_highlight_tweens: Dictionary = {}
 @onready var lbl_log      := $CanvasLayer/UIRoot/Bottom/HBoxContainer/CombatLog
 @onready var next_dialog: AcceptDialog = get_node_or_null("CanvasLayer/UIRoot/NextEnemyDialog")
 @onready var cam: Camera2D = $Camera2D
@@ -95,10 +103,14 @@ var enemy_turn_delay: float = 0.6
 
 ## Modyfikator pancerza gracza (Safe + / Wild -) — aktywny do początku następnej tury gracza.
 var player_temp_armor_delta: int = 0
+## Jednorazowe obniżenie armor wroga przy następnym trafieniu gracza (np. Riposta).
+var enemy_armor_penalty: int = 0
 var _default_dice_set: Array[DiceDef] = []
 
 var current_enemy_data: Dictionary = {}
 var resolving_turn: bool = false
+var _game_pause_depth: int = 0
+var _inventory_pause_active: bool = false
 
 var _heal_particles: GPUParticles2D
 
@@ -120,6 +132,13 @@ const CLASS_TEXTURES := {
 
 # --- SKILLS ---
 const SKILL_COOLDOWN_TURNS := 10
+const WEAPON_SKILL_SLOT := 5
+const WEAPON_SKILL_CD_LONG := 12
+const WEAPON_SKILL_CD_BOW := 9
+## Longest-first — „crossbow” before „bow”.
+const WEAPON_ICON_NAME_KEYS := [
+	"crossbow", "dagger", "hammer", "spear", "blade", "saber", "mace", "sword", "axe", "bow",
+]
 
 # slot->skill dict (na start tylko slot 1 = Power Strike)
 var skills: Dictionary = {}
@@ -300,6 +319,52 @@ const ICON_BY_TYPE := {
 	"ring1": "res://ikony/ring_icon.png",
 	"ring2": "res://ikony/ring_icon.png",
 	"potion":    "res://ikony/potion_icon.png"
+}
+
+const WEAPON_SKILLS := {
+	"sword": {
+		"name": "Riposte",
+		"desc": "d10 attack + d6 parry. Hit: 115% dmg. d6≥5: +1 Armor. d6=6: enemy −1 Armor on your next hit.",
+	},
+	"axe": {
+		"name": "Skull Cleave",
+		"desc": "d20 strike: 145% on hit, 45% on miss. No crit.",
+	},
+	"dagger": {
+		"name": "Needle Flurry",
+		"desc": "Two d10 attacks (55% dmg each, crit on 10).",
+	},
+	"mace": {
+		"name": "Shatter Guard",
+		"desc": "d20 attack; d6 ignores up to 3 enemy Armor. Hit: 110% dmg.",
+	},
+	"spear": {
+		"name": "Lunge",
+		"desc": "d10 attack vs Armor−3. 125% dmg, crit on 10.",
+	},
+	"hammer": {
+		"name": "Earthshaker",
+		"desc": "d20 + d10: 155% on hit (+4% per d10 point); 55% on miss. No armor penalty.",
+		"cd": WEAPON_SKILL_CD_LONG,
+	},
+	"blade": {
+		"name": "Flowing Cut",
+		"desc": "d6 then d20: 2 slashes if d6≥4 (2nd at 50%, no crit).",
+	},
+	"saber": {
+		"name": "Duelist's Gambit",
+		"desc": "Roll 2× d20, use higher. 100% dmg; 19–20 = crit.",
+	},
+	"bow": {
+		"name": "Aimed Shot",
+		"desc": "d10 vs Armor−2. 120% dmg, crit on 10.",
+		"cd": WEAPON_SKILL_CD_BOW,
+	},
+	"crossbow": {
+		"name": "Overdraw",
+		"desc": "d20 hit + d10 bonus dmg (+8% per point). −1 Armor until your next action.",
+		"cd": WEAPON_SKILL_CD_LONG,
+	},
 }
 
 
@@ -590,6 +655,7 @@ func _ready() -> void:
 	skill_cooldowns[1] = 0
 	# slot [2] zostawiamy pusty – do klasowych umiejętności
 	_create_skills_ui()
+	_refresh_weapon_skill()
 	_update_skills_ui()
 	# ===== SKILLS: END =====
 	_apply_global_font()
@@ -650,6 +716,7 @@ func _ready() -> void:
 	# Stwórz wyższy CanvasLayer dla inventory
 	var inv_layer := CanvasLayer.new()
 	inv_layer.layer = 10
+	inv_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(inv_layer)
 	var inv_scene := load("res://inventory_screen.tscn") as PackedScene
 	inventory_screen = inv_scene.instantiate()
@@ -737,8 +804,10 @@ func open_inventory() -> void:
 			"ring2":    equipped_ring2,
 		}
 		inventory_screen.open(inventory, eq, stats)
+		_set_inventory_paused(true)
 
 func _on_inventory_closed() -> void:
+	_set_inventory_paused(false)
 	print("[INVENTORY] Closed")
 
 func _on_inventory_equip(slot_key: String, idx: int) -> void:
@@ -897,10 +966,33 @@ func shake_camera(intensity: float = 6.0, duration: float = 0.15) -> void:
 		t.tween_property(cam, "offset", off, duration / steps * 0.9)
 	t.tween_property(cam, "offset", original, duration * 0.2)
 
-func hitstop(time_sec: float = 0.07) -> void:
+func _push_game_pause() -> void:
+	_game_pause_depth += 1
 	get_tree().paused = true
+
+
+func _pop_game_pause() -> void:
+	_game_pause_depth = maxi(0, _game_pause_depth - 1)
+	get_tree().paused = _game_pause_depth > 0
+
+
+func _set_inventory_paused(active: bool) -> void:
+	if active:
+		if _inventory_pause_active:
+			return
+		_inventory_pause_active = true
+		_push_game_pause()
+	else:
+		if not _inventory_pause_active:
+			return
+		_inventory_pause_active = false
+		_pop_game_pause()
+
+
+func hitstop(time_sec: float = 0.07) -> void:
+	_push_game_pause()
 	await get_tree().create_timer(time_sec, true).timeout
-	get_tree().paused = false
+	_pop_game_pause()
 
 func _pick_enemy() -> Dictionary:
 	# 1) Eventy (Shrine / Chest) tylko gdy minął odstęp
@@ -962,6 +1054,7 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 
 
 	player_temp_armor_delta = 0
+	enemy_armor_penalty = 0
 	current_enemy_data = data.duplicate(true)
 	# Ensure armor exists (new armor system). Fallback from difficulty.
 	if not current_enemy_data.has("armor"):
@@ -1021,15 +1114,74 @@ func _process(_d: float) -> void:
 	_update_world_background_position()
 
 
+func _prepare_attack_highlight(slot: ColorRect, accent: Color) -> void:
+	if slot == null:
+		return
+	slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot.color = Color(1, 1, 1, 1)
+	slot.scale = Vector2.ONE
+	var mat := ShaderMaterial.new()
+	mat.shader = _ATTACK_SLOT_HIGHLIGHT_SHADER
+	mat.set_shader_parameter("glow_color", accent)
+	mat.set_shader_parameter("strength", 0.0)
+	slot.material = mat
+	slot.resized.connect(func() -> void:
+		slot.pivot_offset = slot.size * 0.5
+	)
+	slot.pivot_offset = slot.size * 0.5
+
+
+func _kill_attack_highlight_tween(slot: ColorRect) -> void:
+	if slot == null:
+		return
+	var key: int = slot.get_instance_id()
+	if not _attack_highlight_tweens.has(key):
+		return
+	var tw: Variant = _attack_highlight_tweens[key]
+	if tw is Tween and (tw as Tween).is_valid():
+		(tw as Tween).kill()
+	_attack_highlight_tweens.erase(key)
+
+
 func _set_attack_slot_highlight(slot: ColorRect, active: bool, pressed: bool = false) -> void:
 	if slot == null or not is_instance_valid(slot):
 		return
-	if not active:
-		slot.color = _ATTACK_SLOT_HIGHLIGHT_OFF
-	elif pressed:
-		slot.color = _ATTACK_SLOT_HIGHLIGHT_PRESS
-	else:
-		slot.color = _ATTACK_SLOT_HIGHLIGHT_HOVER
+	_kill_attack_highlight_tween(slot)
+
+	var mat := slot.material as ShaderMaterial
+	if mat == null:
+		return
+
+	var target_strength: float = 0.0
+	var target_scale: Vector2 = Vector2.ONE
+	var duration: float = _ATTACK_SLOT_HIGHLIGHT_TWEEN_OUT
+	var trans: Tween.TransitionType = Tween.TRANS_CUBIC
+	var ease: Tween.EaseType = Tween.EASE_OUT
+
+	if active:
+		if pressed:
+			target_strength = _ATTACK_SLOT_HIGHLIGHT_STRENGTH_PRESS
+			duration = 0.07
+			trans = Tween.TRANS_QUAD
+		else:
+			target_strength = _ATTACK_SLOT_HIGHLIGHT_STRENGTH_HOVER
+			target_scale = _ATTACK_SLOT_HIGHLIGHT_HOVER_SCALE
+			duration = _ATTACK_SLOT_HIGHLIGHT_TWEEN_IN
+
+	var current_strength: float = float(mat.get_shader_parameter("strength"))
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.set_trans(trans)
+	tw.set_ease(ease)
+	tw.tween_method(
+		func(v: float) -> void:
+			mat.set_shader_parameter("strength", v),
+		current_strength,
+		target_strength,
+		duration
+	)
+	tw.tween_property(slot, "scale", target_scale, duration)
+	_attack_highlight_tweens[slot.get_instance_id()] = tw
 
 
 func _clear_attack_slot_highlights() -> void:
@@ -1039,6 +1191,9 @@ func _clear_attack_slot_highlights() -> void:
 
 
 func _wire_attack_slot_ui() -> void:
+	_prepare_attack_highlight(highlight_attack_basic, _ATTACK_SLOT_HIGHLIGHT_ACCENT_BASIC)
+	_prepare_attack_highlight(highlight_attack_safe, _ATTACK_SLOT_HIGHLIGHT_ACCENT_SAFE)
+	_prepare_attack_highlight(highlight_attack_wild, _ATTACK_SLOT_HIGHLIGHT_ACCENT_WILD)
 	_wire_one_attack_slot(btn_attack, highlight_attack_basic, AttackMode.BASIC)
 	_wire_one_attack_slot(btn_safe_attack, highlight_attack_safe, AttackMode.SAFE)
 	_wire_one_attack_slot(btn_wild_attack, highlight_attack_wild, AttackMode.WILD)
@@ -1155,11 +1310,28 @@ func _player_safe_attack_round(atk_roll: int, guard_roll: int) -> String:
 	return text
 
 
-func _player_attack_round_with_roll(roll: int, extra_dmg_mult: float = 1.0, crit_on: int = CRIT) -> String:
+func _enemy_armor_for_player(armor_ignore: int = 0) -> int:
+	var base := clampi(int(current_enemy_data.get("armor", 0)), 0, 15)
+	return maxi(0, base - armor_ignore - enemy_armor_penalty)
+
+
+func _consume_enemy_armor_penalty() -> void:
+	enemy_armor_penalty = 0
+
+
+func _player_attack_round_with_roll(
+	roll: int,
+	extra_dmg_mult: float = 1.0,
+	crit_on: int = CRIT,
+	armor_ignore: int = 0,
+	allow_crit: bool = true,
+	wide_crit_from: int = -1
+) -> String:
 	var text := ""
 	# Must be set BEFORE enemy.take_damage(), because `defeated` signal fires inside it.
 	_last_kill_context = {"roll": roll, "weapon_before": weapon.duplicate(true)}
-	var enemy_armor: int = clamp(int(current_enemy_data.get("armor", 0)), 0, 15)
+	var enemy_armor: int = _enemy_armor_for_player(armor_ignore)
+	_consume_enemy_armor_penalty()
 	
 	# Armor-based hit rules:
 	# roll < armor -> miss
@@ -1174,7 +1346,12 @@ func _player_attack_round_with_roll(roll: int, extra_dmg_mult: float = 1.0, crit
 	var base_dmg: int = calc_player_weapon_damage()
 	var kind := "hit"
 	var mult := 1.0
-	var crit := (roll == crit_on)
+	var crit := false
+	if allow_crit:
+		if wide_crit_from >= 0 and roll >= wide_crit_from:
+			crit = true
+		elif roll == crit_on:
+			crit = true
 	if crit:
 		kind = "crit"
 		mult = calc_crit_multiplier()
@@ -3070,14 +3247,31 @@ func _is_item_equipped(key:String, idx:int) -> bool:
 			return false
 
 
+func _consume_weapon_equip_turn() -> void:
+	if resolving_turn:
+		return
+	if turn != Turn.PLAYER:
+		return
+	if not player.is_alive() or not enemy.is_alive():
+		return
+	if bool(current_enemy_data.get("treasure", false)):
+		return
+	if lbl_log:
+		lbl_log.text = "You swap weapons — your turn ends."
+	set_turn(Turn.ENEMY)
+	_tick_skill_cooldowns()
+
+
 func _equip_item(key:String, idx:int) -> void:
 	var items: Array = inventory.get(key, [])
 	if idx < 0 or idx >= items.size():
 		return
 	var it: Dictionary = items[idx]
+	var weapon_changed_in_combat := false
 
 	match key:
 		"weapon":
+			var prev_name := String(weapon.get("name", ""))
 			# IMPORTANT: keep a reference to the inventory item (no copy),
 			# otherwise shrine/permanent and boss-upgrade desync from backpack.
 			weapon = it
@@ -3086,6 +3280,7 @@ func _equip_item(key:String, idx:int) -> void:
 			if not weapon.has("base"): weapon["base"] = int(weapon.get("damage", 10))
 			if not weapon.has("scale"): weapon["scale"] = {"str": 1.0, "agi": 0.0}
 			if not weapon.has("bonuses"): weapon["bonuses"] = {}
+			weapon_changed_in_combat = String(weapon.get("name", "")) != prev_name
 		"armor":
 			equipped_armor = it
 		"helmet":
@@ -3104,10 +3299,14 @@ func _equip_item(key:String, idx:int) -> void:
 			pass
 
 	_refresh_ring_skill()
+	_refresh_weapon_skill()
 	_sync_player_max_hp_from_gear()
 
 	_update_labels()
 	_sync_inventory_screen_if_open()
+
+	if weapon_changed_in_combat:
+		_consume_weapon_equip_turn()
 
 func _unarmed_weapon() -> Dictionary:
 	return {
@@ -3147,10 +3346,61 @@ func _unequip_item(key: String) -> void:
 			pass
 
 	_refresh_ring_skill()
+	_refresh_weapon_skill()
 	_sync_player_max_hp_from_gear()
 
 	_update_labels()
 	_sync_inventory_screen_if_open()
+
+func _weapon_form_from_name(item_name: String) -> String:
+	var n := item_name.to_lower()
+	if n == "unarmed" or n == "":
+		return ""
+	for k in WEAPON_ICON_NAME_KEYS:
+		if k in n:
+			return k
+	return ""
+
+
+func _weapon_form_from_item(it: Dictionary) -> String:
+	return _weapon_form_from_name(String(it.get("name", "")))
+
+
+func _refresh_weapon_skill() -> void:
+	var form := _weapon_form_from_item(weapon)
+	if skills.has(WEAPON_SKILL_SLOT) and String(skills[WEAPON_SKILL_SLOT].get("source", "")) == "weapon":
+		skills.erase(WEAPON_SKILL_SLOT)
+	if form == "":
+		# Zachowaj cooldown slotu 5 (anty-exploit: zdejmij broń → załóż inną).
+		_update_skills_ui()
+		return
+	var def: Dictionary = WEAPON_SKILLS.get(form, {})
+	if def.is_empty():
+		_update_skills_ui()
+		return
+	skills[WEAPON_SKILL_SLOT] = {
+		"key": "weapon_skill",
+		"weapon_form": form,
+		"name": String(def.get("name", "Weapon Skill")),
+		"type": "active",
+		"desc": String(def.get("desc", "")),
+		"source": "weapon",
+		"icon_key": form,
+	}
+	# Cooldown tylko przy pierwszym użyciu slotu w runie — nigdy przy wymianie broni.
+	if not skill_cooldowns.has(WEAPON_SKILL_SLOT):
+		skill_cooldowns[WEAPON_SKILL_SLOT] = 0
+	_update_skills_ui()
+
+
+func _skill_icon_texture_for(sd: Dictionary) -> Texture2D:
+	var icon_key := String(sd.get("icon_key", ""))
+	if icon_key != "" and ICON_BY_TYPE.has(icon_key):
+		var t = load(String(ICON_BY_TYPE[icon_key]))
+		if t is Texture2D:
+			return t
+	return _skill_icon_for(String(sd.get("name", "")))
+
 
 func _refresh_ring_skill() -> void:
 	var ring_skill_id := ""
@@ -3871,7 +4121,7 @@ func _update_skills_ui() -> void:
 			btn.disabled = cd > 0
 			if btn is Button:
 				var bbtn := btn as Button
-				bbtn.icon = _skill_icon_for(nm)
+				bbtn.icon = _skill_icon_texture_for(sd)
 				bbtn.expand_icon = true
 				bbtn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 				bbtn.text = ""
@@ -3933,6 +4183,8 @@ func _try_use_skill(slot:int) -> void:
 			await _skill_quick_slash(slot)
 		"shield":
 			await _skill_shield_block(slot)
+		"weapon_skill":
+			await _use_weapon_skill(slot)
 		_:
 			if lbl_log:
 				lbl_log.text = "Skill not implemented yet."
@@ -4109,6 +4361,221 @@ func _skill_fury(slot:int) -> void:
 	_tick_skill_cooldowns()
 	resolving_turn = false
 
+
+func _weapon_skill_cd_for(slot: int) -> int:
+	var form := String(skills.get(slot, {}).get("weapon_form", ""))
+	var def: Dictionary = WEAPON_SKILLS.get(form, {})
+	return int(def.get("cd", SKILL_COOLDOWN_TURNS))
+
+
+func _finish_active_skill_turn(slot: int, cd_turns: int = -1) -> void:
+	if cd_turns < 0:
+		cd_turns = _weapon_skill_cd_for(slot) if slot == WEAPON_SKILL_SLOT else SKILL_COOLDOWN_TURNS
+	skill_cooldowns[slot] = cd_turns
+	_update_skills_ui()
+	await get_tree().create_timer(0.1).timeout
+	if enemy.is_alive():
+		set_turn(Turn.ENEMY)
+	_tick_skill_cooldowns()
+	resolving_turn = false
+
+
+func _use_weapon_skill(slot: int) -> void:
+	if not skills.has(slot):
+		return
+	var form := String(skills[slot].get("weapon_form", ""))
+	resolving_turn = true
+	match form:
+		"sword":
+			await _ws_riposte(slot)
+		"axe":
+			await _ws_skull_cleave(slot)
+		"dagger":
+			await _ws_needle_flurry(slot)
+		"mace":
+			await _ws_shatter_guard(slot)
+		"spear":
+			await _ws_lunge(slot)
+		"hammer":
+			await _ws_earthshaker(slot)
+		"blade":
+			await _ws_flowing_cut(slot)
+		"saber":
+			await _ws_duelist_gambit(slot)
+		"bow":
+			await _ws_aimed_shot(slot)
+		"crossbow":
+			await _ws_overdraw(slot)
+		_:
+			if lbl_log:
+				lbl_log.text = "Unknown weapon skill."
+			resolving_turn = false
+
+
+func _ws_riposte(slot: int) -> void:
+	var atk_roll: int = randi_range(1, 10)
+	var guard_roll: int = randi_range(1, 6)
+	await _play_dice_roll_animation([_d10_face_value(atk_roll), guard_roll], ["D10", "D6"])
+	var log := "Riposte: d10=%d, d6=%d.\n" % [atk_roll, guard_roll]
+	log += _player_attack_round_with_roll(atk_roll, 1.15, SAFE_ATTACK_CRIT)
+	if guard_roll >= 5:
+		player_temp_armor_delta += 1
+		_refresh_player_armor_label()
+		log += "+1 Armor until your next action.\n"
+	if guard_roll == 6:
+		enemy_armor_penalty = 1
+		log += "Enemy Armor −1 on your next hit.\n"
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot)
+
+
+func _ws_skull_cleave(slot: int) -> void:
+	var roll: int = randi_range(1, 20)
+	await _play_dice_roll_animation([roll], ["D20"])
+	_last_kill_context = {"roll": roll, "weapon_before": weapon.duplicate(true)}
+	var enemy_armor: int = _enemy_armor_for_player()
+	_consume_enemy_armor_penalty()
+	var base_dmg: int = calc_player_weapon_damage()
+	var log := "Skull Cleave: d20=%d vs Armor %d.\n" % [roll, enemy_armor]
+	if roll >= enemy_armor:
+		var dmg: int = maxi(1, int(round(float(base_dmg) * 1.45)))
+		enemy.take_damage(dmg)
+		show_damage_popup(enemy, str(dmg), "hit")
+		log += "Hit for %d dmg (145%%).\n" % dmg
+	else:
+		var dmg: int = maxi(1, int(round(float(base_dmg) * 0.45)))
+		enemy.take_damage(dmg)
+		show_damage_popup(enemy, str(dmg), "hit")
+		log += "Glancing blow for %d dmg (45%%).\n" % dmg
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot)
+
+
+func _ws_needle_flurry(slot: int) -> void:
+	var r1: int = randi_range(1, 10)
+	var r2: int = randi_range(1, 10)
+	await _play_dice_roll_animation([_d10_face_value(r1), _d10_face_value(r2)], ["D10", "D10"])
+	var log := "Needle Flurry:\n"
+	log += _player_attack_round_with_roll(r1, 0.55, SAFE_ATTACK_CRIT)
+	if enemy.is_alive():
+		log += _player_attack_round_with_roll(r2, 0.55, SAFE_ATTACK_CRIT)
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot)
+
+
+func _ws_shatter_guard(slot: int) -> void:
+	var roll: int = randi_range(1, 20)
+	var crush: int = randi_range(1, 6)
+	await _play_dice_roll_animation([roll, crush], ["D20", "D6"])
+	var ignore: int = int(ceil(float(crush) / 2.0))
+	var log := "Shatter Guard: d20=%d, d6=%d (ignore %d Armor).\n" % [roll, crush, ignore]
+	log += _player_attack_round_with_roll(roll, 1.10, CRIT, ignore)
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot)
+
+
+func _ws_lunge(slot: int) -> void:
+	var roll: int = randi_range(1, 10)
+	await _play_dice_roll_animation([_d10_face_value(roll)], ["D10"])
+	var log := "Lunge: d10=%d (Armor−3).\n" % roll
+	log += _player_attack_round_with_roll(roll, 1.25, SAFE_ATTACK_CRIT, 3)
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot)
+
+
+func _ws_earthshaker(slot: int) -> void:
+	var d20_roll: int = randi_range(1, 20)
+	var d10_roll: int = randi_range(1, 10)
+	await _play_dice_roll_animation([d20_roll, _d10_face_value(d10_roll)], ["D20", "D10"])
+	_last_kill_context = {"roll": d20_roll, "weapon_before": weapon.duplicate(true)}
+	var enemy_armor: int = _enemy_armor_for_player()
+	_consume_enemy_armor_penalty()
+	var base_dmg: int = calc_player_weapon_damage()
+	var log := "Earthshaker: d20=%d, d10=%d vs Armor %d.\n" % [d20_roll, d10_roll, enemy_armor]
+	if d20_roll >= enemy_armor:
+		var bonus: float = 1.0 + float(d10_roll - 1) * 0.04
+		var dmg: int = maxi(1, int(round(float(base_dmg) * 1.55 * bonus)))
+		var crit: bool = (d20_roll == CRIT)
+		var kind: String = "crit" if crit else "hit"
+		if crit:
+			dmg = max(1, int(round(float(dmg) * calc_crit_multiplier())))
+		enemy.take_damage(dmg)
+		show_damage_popup(enemy, str(dmg), kind)
+		log += "Hit for %d dmg.\n" % dmg
+	else:
+		var dmg: int = maxi(1, int(round(float(base_dmg) * 0.55)))
+		enemy.take_damage(dmg)
+		show_damage_popup(enemy, str(dmg), "hit")
+		log += "Shockwave for %d dmg (55%%).\n" % dmg
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot, WEAPON_SKILL_CD_LONG)
+
+
+func _ws_flowing_cut(slot: int) -> void:
+	var flow: int = randi_range(1, 6)
+	var roll: int = randi_range(1, 20)
+	await _play_dice_roll_animation([flow, roll], ["D6", "D20"])
+	var two_slash := flow >= 4
+	var log := "Flowing Cut: d6=%d → %s.\n" % [flow, "2 slashes" if two_slash else "1 slash"]
+	log += _player_attack_round_with_roll(roll, 1.0, CRIT)
+	if two_slash and enemy.is_alive():
+		var roll2: int = randi_range(1, 20)
+		await _play_dice_roll_animation([roll2], ["D20"])
+		log += _player_attack_round_with_roll(roll2, 0.5, CRIT, 0, false)
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot)
+
+
+func _ws_duelist_gambit(slot: int) -> void:
+	var r1: int = randi_range(1, 20)
+	var r2: int = randi_range(1, 20)
+	await _play_dice_roll_animation([r1, r2], ["D20", "D20"])
+	var roll: int = maxi(r1, r2)
+	var log := "Duelist's Gambit: d20 %d & %d → use %d.\n" % [r1, r2, roll]
+	log += _player_attack_round_with_roll(roll, 1.0, CRIT, 0, true, 19)
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot)
+
+
+func _ws_aimed_shot(slot: int) -> void:
+	var roll: int = randi_range(1, 10)
+	await _play_dice_roll_animation([_d10_face_value(roll)], ["D10"])
+	var log := "Aimed Shot: d10=%d (Armor−2).\n" % roll
+	log += _player_attack_round_with_roll(roll, 1.20, SAFE_ATTACK_CRIT, 2)
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot, WEAPON_SKILL_CD_BOW)
+
+
+func _ws_overdraw(slot: int) -> void:
+	var d20_roll: int = randi_range(1, 20)
+	var d10_roll: int = randi_range(1, 10)
+	await _play_dice_roll_animation([d20_roll, _d10_face_value(d10_roll)], ["D20", "D10"])
+	player_temp_armor_delta -= 1
+	_refresh_player_armor_label()
+	var enemy_armor: int = _enemy_armor_for_player()
+	var log := "Overdraw: d20=%d, d10=%d vs Armor %d. Armor −1 until your next action.\n" % [
+		d20_roll, d10_roll, enemy_armor
+	]
+	log += _player_attack_round_with_roll(d20_roll, 1.0, CRIT)
+	if d20_roll >= enemy_armor and enemy.is_alive() and d10_roll > 0:
+		var bonus_dmg: int = maxi(1, int(round(float(calc_player_weapon_damage()) * 0.08 * float(d10_roll))))
+		enemy.take_damage(bonus_dmg)
+		show_damage_popup(enemy, str(bonus_dmg), "hit")
+		log += "Overdraw burst +%d dmg.\n" % bonus_dmg
+	if lbl_log:
+		lbl_log.text = log
+	await _finish_active_skill_turn(slot, WEAPON_SKILL_CD_LONG)
+
+
 func _grant_class_skills(class_key: String) -> void:
 	# Slot [1] = podstawowa umiejętność (zostaje bez zmian, jeśli już masz)
 	# Jeśli chcesz mieć pewność, że zawsze istnieje: odkomentuj poniższe 2 linie:
@@ -4180,6 +4647,7 @@ func _grant_class_skills(class_key: String) -> void:
 			# brak/nieznana klasa – nic nie dodajemy
 			pass
 
+	_refresh_weapon_skill()
 	# odśwież UI jeśli panel już istnieje
 	_update_skills_ui()
 
