@@ -25,6 +25,7 @@ extends Node2D
 const _ATTACK_SLOT_HIGHLIGHT_SHADER := preload("res://ui/attack_slot_highlight.gdshader")
 const _FLOATING_DAMAGE_NUMBERS := preload("res://ui/floating_damage_numbers.gd")
 const _NEAR_DEATH_WARNING_SCRIPT := preload("res://ui/near_death_warning.gd")
+const _ENEMY_DEATH_ICON_FX := preload("res://ui/enemy_death_icon_fx.gd")
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_BASIC := Color(0.88, 0.94, 1.0, 1.0)
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_SAFE := Color(0.78, 1.0, 0.86, 1.0)
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_WILD := Color(1.0, 0.78, 0.72, 1.0)
@@ -1449,6 +1450,7 @@ func _on_enemy_hp_changed(cur:int, maxv:int) -> void:
 		lbl_enemy.text = ""
 
 func _on_enemy_defeated() -> void:
+	_spawn_enemy_death_icon_fx()
 	var last_enemy: Dictionary = {}
 	if typeof(current_enemy_data) == TYPE_DICTIONARY:
 		last_enemy = current_enemy_data.duplicate(true)
@@ -1881,6 +1883,10 @@ func _update_labels() -> void:
 
 func show_damage_popup(target: Node2D, text: String, kind: String = "hit") -> void:
 	_FLOATING_DAMAGE_NUMBERS.spawn(fx_root, cam, target, text, kind, DMG_FONT)
+
+
+func _spawn_enemy_death_icon_fx() -> void:
+	_ENEMY_DEATH_ICON_FX.spawn(fx_root, enemy)
 
 
 func _setup_near_death_warning() -> void:
