@@ -23,6 +23,8 @@ extends Node2D
 ) as ColorRect
 
 const _ATTACK_SLOT_HIGHLIGHT_SHADER := preload("res://ui/attack_slot_highlight.gdshader")
+const _FLOATING_DAMAGE_NUMBERS := preload("res://ui/floating_damage_numbers.gd")
+const _NEAR_DEATH_WARNING_SCRIPT := preload("res://ui/near_death_warning.gd")
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_BASIC := Color(0.88, 0.94, 1.0, 1.0)
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_SAFE := Color(0.78, 1.0, 0.86, 1.0)
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_WILD := Color(1.0, 0.78, 0.72, 1.0)
@@ -76,6 +78,8 @@ var inventory_screen: Control = null
 var home_overlay: ColorRect
 
 var is_in_home: bool = false
+var _near_death_layer: CanvasLayer
+var _near_death_warning: Control
 
 
 # --- Potions UI ---
@@ -565,6 +569,11 @@ func _ready() -> void:
 	# Attack (Basic / Safe / Wild)
 	turn = Turn.PLAYER
 	_init_combat_modules()
+	if fx_root:
+		fx_root.visible = true
+		fx_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		fx_root.z_index = 200
+	_setup_near_death_warning()
 	_dice.cache_default_dice_set()
 	_set_attack_buttons_disabled(false)
 	_wire_attack_slot_ui()
@@ -773,6 +782,7 @@ func open_inventory() -> void:
 
 func _on_inventory_closed() -> void:
 	_set_inventory_paused(false)
+	_update_near_death_warning()
 	print("[INVENTORY] Closed")
 
 func _on_inventory_equip(slot_key: String, idx: int) -> void:
@@ -899,6 +909,7 @@ func set_turn(t: Turn) -> void:
 	turn = t
 	if t == Turn.PLAYER:
 		_refresh_player_armor_label()
+	_update_near_death_warning()
 	_set_attack_buttons_disabled(turn != Turn.PLAYER)
 	if turn == Turn.PLAYER:
 		if lbl_log: lbl_log.text = "Your turn. Choose an attack."
@@ -1032,7 +1043,8 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 		current_enemy_data.get("tex", "")
 	)
 	_update_labels()
-	
+	_update_near_death_warning()
+
 
 	if data.get("treasure", false):
 		if lbl_log:
@@ -1201,6 +1213,7 @@ func _set_attack_buttons_disabled(disabled: bool) -> void:
 func _refresh_player_armor_label() -> void:
 	if lbl_player_armor_value:
 		lbl_player_armor_value.text = str(_calc_player_armor_total())
+	_update_near_death_warning()
 
 
 func _execute_player_attack(mode: AttackMode) -> void:
@@ -1391,6 +1404,7 @@ func _on_player_hp_changed(cur:int, maxv:int) -> void:
 	if lbl_player:
 		lbl_player.text = ""
 	_update_potions_ui()
+	_update_near_death_warning()
 
 func _calc_player_armor_total() -> int:
 	var base := 0
@@ -1683,6 +1697,7 @@ func _on_player_damaged(amount:int) -> void:
 # 	shake_camera(5.0, 0.12)
 
 func _on_player_died() -> void:
+	_update_near_death_warning()
 	# New HUD: keep corners empty; show death via log/other UI later.
 	if lbl_player:
 		lbl_player.text = ""
@@ -1865,47 +1880,54 @@ func _update_labels() -> void:
 	_on_enemy_hp_changed(enemy.hp, enemy.max_hp)
 
 func show_damage_popup(target: Node2D, text: String, kind: String = "hit") -> void:
-	var color := Color(1, 0.3, 0.3)
-	var size := 40
-	if kind == "miss":
-		color = Color(0.8, 0.8, 0.8); size = 40
-	elif kind == "crit":
-		color = Color(1, 0.95, 0.35); size = 55
-	elif kind == "heal":
-		color = Color(0.4, 1.0, 0.4); size = 45
+	_FLOATING_DAMAGE_NUMBERS.spawn(fx_root, cam, target, text, kind, DMG_FONT)
 
-	var shadow := Label.new()
-	shadow.text = text
-	shadow.modulate = Color(0, 0, 0, 0.6)
-	if DMG_FONT:
-		shadow.add_theme_font_override("font", DMG_FONT)
-	shadow.add_theme_font_size_override("font_size", size)
 
-	var label := Label.new()
-	label.text = text
-	label.modulate = color
-	label.autowrap_mode = TextServer.AUTOWRAP_OFF
-	if DMG_FONT:
-		label.add_theme_font_override("font", DMG_FONT)
-	label.add_theme_font_size_override("font_size", size)
+func _setup_near_death_warning() -> void:
+	if _near_death_warning != null and is_instance_valid(_near_death_warning):
+		return
+	_near_death_layer = CanvasLayer.new()
+	_near_death_layer.name = "NearDeathLayer"
+	_near_death_layer.layer = 88
+	add_child(_near_death_layer)
+	_near_death_warning = _NEAR_DEATH_WARNING_SCRIPT.new()
+	_near_death_layer.add_child(_near_death_warning)
 
-	fx_root.add_child(shadow)
-	fx_root.add_child(label)
 
-	var viewport_size := get_viewport().get_visible_rect().size
-	var screen_pos := (target.global_position - cam.global_position) + viewport_size * 0.5
-	shadow.position = screen_pos + Vector2(2, -48)
-	label.position = screen_pos + Vector2(0, -50)
+func _worst_enemy_hit_damage() -> int:
+	if not enemy.is_alive():
+		return 0
+	var base := float(enemy.damage)
+	var armor := _calc_player_armor_total()
+	var worst := maxi(1, int(round(base * CRIT_MULT)))
+	if armor <= 19:
+		var mult := damage_multiplier_from_roll(19, armor)
+		worst = maxi(worst, maxi(1, int(round(base * mult))))
+	if armor >= 0 and armor <= CRIT:
+		worst = maxi(worst, maxi(1, int(round(base * 0.5))))
+	return worst
 
-	var t1 := get_tree().create_tween()
-	t1.tween_property(label, "position", label.position + Vector2(0, -40), 0.5)
-	t1.parallel().tween_property(label, "modulate:a", 0.0, 1.0).from(1.0)
-	t1.finished.connect(func(): label.queue_free())
 
-	var t2 := get_tree().create_tween()
-	t2.tween_property(shadow, "position", shadow.position + Vector2(0, -40), 0.5)
-	t2.parallel().tween_property(shadow, "modulate:a", 0.0, 0.5).from(0.6)
-	t2.finished.connect(func(): shadow.queue_free())
+func _should_show_near_death_warning() -> bool:
+	if is_in_home or not player.is_alive() or not enemy.is_alive():
+		return false
+	if bool(current_enemy_data.get("treasure", false)):
+		return false
+	if inventory_screen != null and inventory_screen.visible:
+		return false
+	if turn != Turn.PLAYER:
+		return false
+	if shield_active:
+		return false
+	return player.hp <= _worst_enemy_hit_damage()
+
+
+func _update_near_death_warning() -> void:
+	if _near_death_warning == null or not is_instance_valid(_near_death_warning):
+		return
+	var active := _should_show_near_death_warning()
+	if _near_death_warning.has_method("set_warning_active"):
+		_near_death_warning.call("set_warning_active", active)
 
 func _on_player_xp_changed(current_xp: int, xp_to_next: int) -> void:
 	if xp_bar:
