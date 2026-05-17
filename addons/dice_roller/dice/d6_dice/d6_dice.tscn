@@ -3,8 +3,8 @@
 [ext_resource type="Script" uid="uid://cctm43po4vuwi" path="res://addons/dice_roller/dice/d6_dice/d6_dice.gd" id="1_g48gd"]
 [ext_resource type="PackedScene" uid="uid://x324c2lmewii" path="res://addons/dice_roller/dice/d6_dice/d6.glb" id="1_loe3q"]
 [ext_resource type="Texture2D" uid="uid://ch6otp30d2hoj" path="res://addons/dice_roller/dice/d6_dice/dice_texture.png" id="2_8nk5g"]
+[ext_resource type="Shader" uid="uid://cgeoit4uymiri" path="res://addons/dice_roller/dice/d6_dice/d6_face.gdshader" id="4_face"]
 [ext_resource type="Texture2D" uid="uid://do3xsddtldsbe" path="res://addons/dice_roller/dice/d6_dice/dice_normal_map.png" id="4_ss6sl"]
-[ext_resource type="Shader" path="res://addons/dice_roller/dice/d6_dice/d6_face.gdshader" id="4_face"]
 [ext_resource type="Shader" uid="uid://bitcdkcbeinfk" path="res://addons/dice_roller/dice/d6_dice/highlight_blur.gdshader" id="5_3sv3t"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_gfni6"]
@@ -17,6 +17,7 @@ shader = ExtResource("4_face")
 shader_parameter/albedo_texture = ExtResource("2_8nk5g")
 shader_parameter/normal_texture = ExtResource("4_ss6sl")
 shader_parameter/normal_scale = -10.0
+shader_parameter/albedo_tint = Color(1, 1, 1, 1)
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_3ephm"]
 render_priority = 0
@@ -34,6 +35,7 @@ center_offset = Vector3(0, 0, -0.8)
 script = ExtResource("1_g48gd")
 
 [node name="Collider" type="CollisionShape3D" parent="." index="0"]
+visible = false
 shape = SubResource("BoxShape3D_gfni6")
 metadata/_edit_lock_ = true
 
@@ -41,8 +43,8 @@ metadata/_edit_lock_ = true
 material_override = SubResource("ShaderMaterial_d6face")
 
 [node name="FaceHighligth" type="MeshInstance3D" parent="." index="2"]
-visible = false
 transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, 0, 0)
+visible = false
 cast_shadow = 0
 mesh = SubResource("QuadMesh_2exy7")
 skeleton = NodePath("")

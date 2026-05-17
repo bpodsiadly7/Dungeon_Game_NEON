@@ -21,6 +21,7 @@ material_override = SubResource("StandardMaterial3D_vr3pl")
 
 [node name="Collider" type="CollisionShape3D" parent="." index="1"]
 transform = Transform3D(1.57, 0, 0, 0, 1.57, 0, 0, 0, 1.57, 0, 0, 0)
+visible = false
 shape = SubResource("ConvexPolygonShape3D_8eeak")
 
 [node name="FaceHighligth" type="Node3D" parent="." index="2"]

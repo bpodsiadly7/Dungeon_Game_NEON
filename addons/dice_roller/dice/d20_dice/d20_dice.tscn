@@ -61,6 +61,7 @@ skeleton = NodePath("")
 
 [node name="Collider" type="CollisionShape3D" parent="."]
 transform = Transform3D(1.571, 0, 0, 0, 1.571, 0, 0, 0, 1.571, 0, 0, 0)
+visible = false
 shape = SubResource("ConvexPolygonShape3D_olwb1")
 
 [node name="FaceHighligth" type="Node3D" parent="."]

@@ -1085,9 +1085,11 @@ func _process(_d: float) -> void:
 			inventory_screen._on_close()
 	
 	if Input.is_action_just_pressed("attack"):
-		print("[DEBUG] Attack key pressed! turn=%s player_alive=%s enemy_alive=%s" % [turn, player.is_alive(), enemy.is_alive()])
-		if turn == Turn.PLAYER and player.is_alive() and enemy.is_alive():
-			_execute_player_attack(AttackMode.BASIC)
+		_try_attack_hotkey(AttackMode.BASIC)
+	elif Input.is_action_just_pressed("attack_safe"):
+		_try_attack_hotkey(AttackMode.SAFE)
+	elif Input.is_action_just_pressed("attack_wild"):
+		_try_attack_hotkey(AttackMode.WILD)
 	# unspent points indicator is positioned under dungeon label
 	_update_world_background_position()
 
@@ -1215,6 +1217,16 @@ func _refresh_player_armor_label() -> void:
 	if lbl_player_armor_value:
 		lbl_player_armor_value.text = str(_calc_player_armor_total())
 	_update_near_death_warning()
+
+
+func _try_attack_hotkey(mode: AttackMode) -> void:
+	if resolving_turn:
+		return
+	if inventory_screen and inventory_screen.visible:
+		return
+	if turn != Turn.PLAYER or not player.is_alive() or not enemy.is_alive():
+		return
+	_execute_player_attack(mode)
 
 
 func _execute_player_attack(mode: AttackMode) -> void:
