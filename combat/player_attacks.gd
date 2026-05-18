@@ -89,7 +89,9 @@ func attack_round_with_roll(
 
 
 func safe_attack_round(atk_roll: int, guard_roll: int) -> String:
-	var text := "Safe Attack: d10=%d, Guard d6=%d. +1 Armor until your next turn.\n" % [atk_roll, guard_roll]
+	var text := "Safe Attack: d10=%d, Guard d6=%d. +%d Armor until your next turn.\n" % [
+		atk_roll, guard_roll, guard_roll
+	]
 	text += attack_round_with_roll(atk_roll, 1.0, CombatDefs.SAFE_ATTACK_CRIT)
 	return text
 
@@ -129,7 +131,7 @@ func execute_attack(mode: int) -> void:
 				[d10_face_value(atk_roll), guard_roll],
 				["D10", "D6"]
 			)
-			_g.player_temp_armor_delta += 1
+			_g.player_temp_armor_delta += guard_roll
 			_g._refresh_player_armor_label()
 			desc = safe_attack_round(atk_roll, guard_roll)
 

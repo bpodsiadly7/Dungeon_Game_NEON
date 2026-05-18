@@ -1,4 +1,4 @@
-[gd_scene load_steps=19 format=3 uid="uid://di8s4oahhme5"]
+[gd_scene load_steps=18 format=3 uid="uid://di8s4oahhme5"]
 
 [ext_resource type="Script" uid="uid://bednyshjiftkh" path="res://main.gd" id="1_1bvp3"]
 [ext_resource type="Texture2D" uid="uid://b843slb3i1pcu" path="res://player_classes/dwarf_novice.png" id="2_7mycd"]
@@ -22,14 +22,6 @@ corner_radius_bottom_left = 6
 corner_detail = 20
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_attack_click"]
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7mycd"]
-bg_color = Color(0.18717611, 0.18717617, 0.18717602, 1)
-corner_radius_top_left = 8
-corner_radius_top_right = 8
-corner_radius_bottom_right = 8
-corner_radius_bottom_left = 8
-corner_detail = 6
 
 [sub_resource type="ViewportTexture" id="ViewportTexture_kek77"]
 viewport_path = NodePath("DiceViewport")
@@ -311,7 +303,7 @@ offset_right = 20.0
 offset_bottom = -20.0
 grow_horizontal = 2
 grow_vertical = 0
-tooltip_text = "Zadaj atak ("
+mouse_filter = 2
 
 [node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UIRoot/Bottom"]
 layout_mode = 1
@@ -476,7 +468,7 @@ offset_top = 6.0
 offset_right = -6.0
 grow_horizontal = 2
 grow_vertical = 2
-tooltip_text = "Safe Attack: d10 hit, d6 guard. +1 Armor until your next turn."
+tooltip_text = "Safe Attack: d10 hit, d6 guard. Armor gained = d6 result (1–6) until your next turn."
 focus_mode = 0
 theme_override_styles/normal = SubResource("StyleBoxEmpty_attack_click")
 theme_override_styles/pressed = SubResource("StyleBoxEmpty_attack_click")
@@ -689,104 +681,6 @@ offset_bottom = -41.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-
-[node name="StatsPanel" type="PanelContainer" parent="CanvasLayer/UIRoot"]
-visible = false
-layout_mode = 1
-anchors_preset = 8
-anchor_left = 0.5
-anchor_top = 0.5
-anchor_right = 0.5
-anchor_bottom = 0.5
-offset_left = -20.0
-offset_top = -20.0
-offset_right = 20.0
-offset_bottom = 20.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_7mycd")
-
-[node name="VBoxContainer" type="VBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="LblStatsHeader" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-custom_minimum_size = Vector2(380, 28)
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "Stats"
-horizontal_alignment = 1
-
-[node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="LblStr" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "STR: 1"
-horizontal_alignment = 3
-
-[node name="BtnStrPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer"]
-layout_mode = 2
-size_flags_horizontal = 8
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "+"
-
-[node name="HBoxContainer2" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="LblAgi" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "AGI: 1"
-horizontal_alignment = 3
-
-[node name="BtnAgiPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2"]
-layout_mode = 2
-size_flags_horizontal = 8
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "+"
-
-[node name="HBoxContainer3" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="LblVit" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "VIT: 1"
-horizontal_alignment = 3
-
-[node name="BtnVitPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3"]
-layout_mode = 2
-size_flags_horizontal = 8
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "+"
-
-[node name="HBoxContainer4" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="LblCrit" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "CRIT: 1"
-horizontal_alignment = 3
-
-[node name="BtnCritPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4"]
-layout_mode = 2
-size_flags_horizontal = 8
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "+"
-
-[node name="LblPoints" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "Unspent points: 0"
-horizontal_alignment = 1
-
-[node name="BtnClose" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "Close"
 
 [node name="DungeonChoiceDialog" type="ConfirmationDialog" parent="CanvasLayer/UIRoot"]
 title = "Dungeon Cleared!"

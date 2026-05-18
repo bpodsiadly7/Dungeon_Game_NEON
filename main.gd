@@ -103,7 +103,7 @@ const WILD_D10_DMG_PER_POINT := CombatDefs.WILD_D10_DMG_PER_POINT
 var turn: Turn = Turn.PLAYER
 var enemy_turn_delay: float = 0.6
 
-## Modyfikator pancerza gracza (Safe + / Wild -) — aktywny do początku następnej tury gracza.
+## Modyfikator pancerza gracza (Safe: +wynik d6 / Wild: -1) — do początku następnej tury gracza.
 var player_temp_armor_delta: int = 0
 ## Jednorazowe obniżenie armor wroga przy następnym trafieniu gracza (np. Riposta).
 var enemy_armor_penalty: int = 0
