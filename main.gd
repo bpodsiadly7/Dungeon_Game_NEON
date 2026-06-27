@@ -98,6 +98,7 @@ var _default_dice_set: Array[DiceDef] = []
 
 var current_enemy_data: Dictionary = {}
 var resolving_turn: bool = false
+var _chest_reward_handled: bool = false
 var _game_pause_depth: int = 0
 var _inventory_pause_active: bool = false
 
@@ -957,7 +958,7 @@ func _enemy_take_turn() -> void:
 	if resolving_turn: return
 	if turn != Turn.ENEMY or not enemy.is_alive() or not player.is_alive(): return
 	resolving_turn = true
-	var desc := _enemy_attack_round()
+	var desc: String = await _enemy_attack_round_async()
 	if lbl_log: lbl_log.text = desc
 	await get_tree().create_timer(0.1).timeout
 	if player.is_alive():
@@ -1310,40 +1311,37 @@ func _d10_face_value(roll_1_to_10: int) -> int:
 
 
 # --- Tura przeciwnika ---
-func _enemy_attack_round() -> String:
+func _enemy_attack_round_async(force_crit: bool = false) -> String:
 	if not enemy.is_alive() or not player.is_alive():
 		return ""
-		# Treasure Chest – nie atakuje
 	if bool(current_enemy_data.get("treasure", false)):
-		# nic nie robi; wracamy turę do gracza
 		return "The chest does nothing..."
 
-	var roll: int = randi_range(1, 20)
+	var roll: int = CRIT if force_crit else randi_range(1, 20)
 	var player_armor: int = _calc_player_armor_total()
 
-	# CRIT przeciwnika
 	if roll == CRIT:
-		# Pasywny unik Assassina (5% wg passive_dodge_chance)
 		if passive_dodge_chance > 0.0 and randf() < passive_dodge_chance:
 			show_damage_popup(player, "dodge", "miss")
 			return "Enemy rolls %d → would CRIT, but you DODGE!" % roll
+		var parried := await _run_crit_parry_minigame()
+		if parried:
+			show_damage_popup(player, "PARRY", "miss")
+			return "Enemy rolls %d → CRIT, but you PARRY! No damage." % roll
 		var dmg_crit: int = int(round(enemy.damage * CRIT_MULT))
 		_apply_player_damage(dmg_crit, "crit")
 		return "Enemy rolls %d vs Armor %d → CRIT for %d dmg." % [roll, player_armor, dmg_crit]
 
-	# MISS
 	if roll < player_armor:
 		show_damage_popup(player, "dodge", "miss")
 		return "Enemy rolls %d vs Armor %d → MISS." % [roll, player_armor]
 
-	# HALF
 	if roll == player_armor:
 		var dmg_half: int = max(1, int(round(float(enemy.damage) * 0.5)))
 		_apply_player_damage(dmg_half, "hit")
 		return "Enemy rolls %d vs Armor %d → HALF for %d dmg." % [roll, player_armor, dmg_half]
 
-	# Scaled hit
-	elif roll > player_armor:
+	if roll > player_armor:
 		if passive_dodge_chance > 0.0 and randf() < passive_dodge_chance:
 			show_damage_popup(player, "dodge", "miss")
 			return "Enemy rolls %d → would HIT, but you DODGE!" % roll
@@ -1352,6 +1350,84 @@ func _enemy_attack_round() -> String:
 		_apply_player_damage(dmg_hit, "hit")
 		return "Enemy rolls %d vs Armor %d → HIT for %d dmg." % [roll, player_armor, dmg_hit]
 	return ""
+
+
+func _crit_parry_rot_speed_for_enemy() -> float:
+	var diff := clampi(int(current_enemy_data.get("difficulty", 1)), 1, 5)
+	return lerpf(5.0, 12.0, float(diff - 1) / 4.0)
+
+
+func _run_crit_parry_minigame() -> bool:
+	var layer := $CanvasLayer
+	if layer == null:
+		return false
+	var mg := CritParryMinigame.new()
+	layer.add_child(mg)
+	var ok: bool = await mg.run(_crit_parry_rot_speed_for_enemy())
+	if is_instance_valid(mg):
+		mg.queue_free()
+	return ok
+
+
+func _roll_treasure_chest_reward() -> Dictionary:
+	var boss_drop_chance := float(DROP_CHANCE_BY_DIFF.get(5, 0.42))
+	if randf() <= boss_drop_chance:
+		var slot_roll := randi() % 100
+		var slot_key := ""
+		if slot_roll < 40:
+			slot_key = "weapon"
+		elif slot_roll < 75:
+			slot_key = "armor"
+		elif slot_roll < 90:
+			slot_key = "helmet"
+		else:
+			slot_key = "necklace"
+		var rarity := _weighted_rarity_by_diff(5)
+		var item := _gen_random_item(slot_key, rarity, 5)
+		return {
+			"kind": "item",
+			"item": item,
+			"color": RARITY_COLORS.get(rarity, Color.WHITE),
+		}
+	return {
+		"kind": "heal",
+		"icons": [TEX_HP_BOTTLE_1, TEX_HP_BOTTLE_2, TEX_HP_BOTTLE_3],
+	}
+
+
+func _apply_treasure_chest_reward(reward: Dictionary) -> void:
+	if reward.get("kind") == "item":
+		var item: Dictionary = reward.get("item", {})
+		var ref := _add_item_to_inventory(item)
+		if lbl_log:
+			lbl_log.text = "Treasure: %s (%s)" % [
+				str(item.get("name", "???")),
+				_rarity_name(int(item.get("rarity", Rarity.COMMON)))
+			]
+		show_damage_popup(player, str(item.get("name", "???")), "heal")
+		_sync_inventory_screen_if_open()
+		if not ref.is_empty():
+			_show_loot_toast(item)
+	else:
+		player.hp = player.max_hp
+		player.emit_signal("hp_changed", player.hp, player.max_hp)
+		if potions < POTION_MAX:
+			potions = POTION_MAX
+			_update_potions_ui()
+		show_damage_popup(player, "FULL HEAL", "heal")
+		if lbl_log:
+			lbl_log.text = "Treasure: fully healed and potions refilled!"
+
+
+func _run_chest_minigame(reward: Dictionary) -> void:
+	var layer := $CanvasLayer
+	if layer == null:
+		return
+	var mg := ChestMinigame.new()
+	layer.add_child(mg)
+	await mg.run(reward)
+	if is_instance_valid(mg):
+		mg.queue_free()
 
 
 
@@ -1519,45 +1595,11 @@ func _on_enemy_defeated() -> void:
 		last_enemy = current_enemy_data.duplicate(true)
 		# --- Treasure Chest reward flow ---
 	if bool(last_enemy.get("treasure", false)):
-		# SZANSA na drop jak u bossa: DROP_CHANCE_BY_DIFF[5]; w przeciwnym razie HEAL
-		var boss_drop_chance := float(DROP_CHANCE_BY_DIFF.get(5, 0.42))
-		var did_drop_item := (randf() <= boss_drop_chance)
-
-		if did_drop_item:
-			# losujemy slot i item jak przy zwykłym dropie, ale diff=5 (boss)
-			var slot_roll := randi() % 100
-			var slot_key := ""
-			if slot_roll < 40:
-				slot_key = "weapon"
-			elif slot_roll < 75:
-				slot_key = "armor"
-			elif slot_roll < 90:
-				slot_key = "helmet"
-			else:
-				slot_key = "necklace"
-
-			var rarity := _weighted_rarity_by_diff(5)
-			var item := _gen_random_item(slot_key, rarity, 5)
-			var ref := _add_item_to_inventory(item)
-
-			if lbl_log:
-				lbl_log.text = "Treasure: %s (%s)" % [str(item.get("name","???")), _rarity_name(int(item.get("rarity", Rarity.COMMON)))]
-			show_damage_popup(player, str(item.get("name","???")), "heal")
-			_sync_inventory_screen_if_open()
-			if not ref.is_empty():
-				_show_loot_toast(item)
+		if not _chest_reward_handled:
+			var reward := _roll_treasure_chest_reward()
+			_apply_treasure_chest_reward(reward)
 		else:
-			# pełne leczenie + dopełnienie mikstur do 3
-			player.hp = player.max_hp
-			player.emit_signal("hp_changed", player.hp, player.max_hp)
-			if potions < POTION_MAX:
-				potions = POTION_MAX
-				_update_potions_ui()
-			show_damage_popup(player, "FULL HEAL", "heal")
-			if lbl_log:
-				lbl_log.text = "Treasure: fully healed and potions refilled!"
-
-		# Po nagrodzie – od razu kolejny przeciwnik
+			_chest_reward_handled = false
 		await _transition_to_next_enemy()
 		set_turn(Turn.PLAYER)
 		return
@@ -4723,6 +4765,12 @@ func _dev_create_panel() -> void:
 
 	vbox.add_child(_dev_separator())
 
+	# --- SEKCJA: KOMBAT ---
+	vbox.add_child(_dev_section_label("KOMBAT"))
+	vbox.add_child(_dev_btn("💥 Wymuś CRIT przeciwnika", func(): _dev_trigger_enemy_crit()))
+
+	vbox.add_child(_dev_separator())
+
 	# --- SEKCJA: DROP RARITY ---
 	vbox.add_child(_dev_section_label("WYMUSZ RZADKOŚĆ DROPU"))
 	var rarity_row := HBoxContainer.new()
@@ -4841,6 +4889,40 @@ func _dev_full_heal() -> void:
 	player.emit_signal("hp_changed", player.hp, player.max_hp)
 	show_damage_popup(player, "FULL HEAL", "heal")
 	_show_toast("Dwarf healed!", 1.0)
+
+
+func _dev_trigger_enemy_crit() -> void:
+	if _is_evolution_choice_open():
+		_show_toast("Close class choice first!", 1.5)
+		return
+	if not player.is_alive():
+		_show_toast("Player is dead!", 1.5)
+		return
+	if not enemy.is_alive():
+		_show_toast("No enemy to attack!", 1.5)
+		return
+	if bool(current_enemy_data.get("treasure", false)):
+		_show_toast("Chest does not attack!", 1.5)
+		return
+	if resolving_turn:
+		_show_toast("Wait for current action...", 1.2)
+		return
+	_dev_run_enemy_crit_attack()
+
+
+func _dev_run_enemy_crit_attack() -> void:
+	resolving_turn = true
+	if btn_attack:
+		btn_attack.disabled = true
+	var desc: String = await _enemy_attack_round_async(true)
+	if lbl_log:
+		lbl_log.text = desc
+	await get_tree().create_timer(0.1).timeout
+	if player.is_alive():
+		set_turn(Turn.PLAYER)
+	resolving_turn = false
+	_show_toast("Enemy CRIT test", 1.0)
+
 
 func _dev_add_level() -> void:
 	_dev_add_levels(1)

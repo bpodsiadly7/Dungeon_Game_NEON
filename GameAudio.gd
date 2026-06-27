@@ -12,6 +12,9 @@ const SFX_ENEMY_TRANSITION := "res://sound/ESM_Braaam_Strike_2_Hit_One_Shot_Wood
 const SFX_POTION_HEAL := "res://sound/ESM_Ancient_Game_Magic_Buff_Heal_2_Fantasy_Tonal_Accent_Hit_Stab.wav"
 const SFX_COLONY_LOSS := "res://sound/ESM_GB_fx_foley_one_shot_firebrst_flame_extinguish_short_01_burn_fire_flame.wav"
 const SFX_COLONY_GROWTH := "res://sound/ESM_DGF_fx_foley_footstep_stone_warrior_walk_faster_armor_war_03.wav"
+const SFX_PARRY_SUCCESS := "res://sound/ESM_SPG_fx_action_parry_impact_massive_metal_strike_crash_02.wav"
+const SFX_PARRY_FAIL := "res://sound/FL_PVT_138_Fx_Braam_System_LFO_Fmin.wav"
+const SFX_CHEST_EVENT := "res://sound/chesteventsound.wav"
 
 const COMBAT_SFX_DB := -20.0
 
@@ -67,6 +70,18 @@ func play_colony_loss_tick() -> void:
 
 func play_colony_growth_tick() -> void:
 	_play(SFX_COLONY_GROWTH, -8.0, randf_range(0.92, 1.08))
+
+
+func play_parry_success() -> void:
+	_play(SFX_PARRY_SUCCESS, COMBAT_SFX_DB, randf_range(0.96, 1.04))
+
+
+func play_parry_fail() -> void:
+	_play(SFX_PARRY_FAIL, COMBAT_SFX_DB, randf_range(0.94, 1.06))
+
+
+func play_chest_event() -> void:
+	_play(SFX_CHEST_EVENT, -6.0, randf_range(0.97, 1.03))
 
 
 func _play(path: String, volume_db: float, pitch_scale: float) -> void:

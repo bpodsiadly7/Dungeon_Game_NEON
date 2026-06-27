@@ -110,7 +110,10 @@ func execute_attack(mode: int) -> void:
 		_g.resolving_turn = true
 		if _g.lbl_log:
 			_g.lbl_log.text = "You open the chest..."
-		await _g.get_tree().create_timer(0.3).timeout
+		var reward: Dictionary = _g._roll_treasure_chest_reward()
+		await _g._run_chest_minigame(reward)
+		_g._apply_treasure_chest_reward(reward)
+		_g._chest_reward_handled = true
 		_g.enemy.take_damage(_g.enemy.hp)
 		_g.resolving_turn = false
 		return
