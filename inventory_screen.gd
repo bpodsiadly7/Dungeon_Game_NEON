@@ -1,6 +1,7 @@
 extends Control
 
 signal closed
+signal loadout_changed
 signal item_equipped(slot_key: String, idx: int)
 signal item_dropped(slot_key: String, idx: int)
 signal stat_spent(stat_key: String)
@@ -115,6 +116,9 @@ var _drag_slot: String = ""
 var _drag_idx: int = -1
 var _drag_preview: PanelContainer = null
 var _drag_source: String = "" # "backpack" | "equipped"
+var home_mode: bool = false
+var _screen_title: Label = null
+var _backpack_title: Label = null
 ## Zwraca Texture2D gracza z aktywnego runa (tak samo jak widoczna postać). Jeśli Callable pusty / null — fallback z GameState.
 var _run_player_texture_supplier: Callable = Callable()
 
@@ -167,6 +171,7 @@ func _build_ui() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	header.add_child(title)
+	_screen_title = title
 	var close_btn := Button.new()
 	close_btn.text = "X"
 	close_btn.custom_minimum_size = Vector2(44, 44)
@@ -334,6 +339,7 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 	var bp_title := _make_label("BACKPACK", 16, Color(0.95, 0.82, 0.30))
 	bp_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(bp_title)
+	_backpack_title = bp_title
 
 	for sort_label in ["All", "Type", "Rarity"]:
 		var captured_label: String = sort_label
@@ -417,6 +423,8 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 	btn_row.add_child(_drop_btn)
 
 func open(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
+	home_mode = false
+	_apply_mode_ui()
 	inventory    = inv
 	equipped     = eq
 	player_stats = stats
@@ -428,8 +436,96 @@ func open(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
 	visible = true
 	move_to_front()
 
+
+func open_home_loadout() -> void:
+	home_mode = true
+	_apply_mode_ui()
+	_reload_home_data()
+	player_stats = _build_home_player_stats()
+	_sync_char_portrait()
+	_refresh_stats()
+	_refresh_all_slots()
+	_refresh_backpack()
+	_clear_selection()
+	visible = true
+	move_to_front()
+
+
+func _apply_mode_ui() -> void:
+	if _screen_title:
+		_screen_title.text = "LOADOUT" if home_mode else "INVENTORY"
+	if _backpack_title:
+		_backpack_title.text = "PERMANENT STORAGE" if home_mode else "BACKPACK"
+	for key in _stats_plus_buttons:
+		var btn: Button = _stats_plus_buttons[key]
+		if btn:
+			btn.visible = not home_mode
+	if _equip_btn:
+		_equip_btn.text = "TAKE" if home_mode else "EQUIP"
+
+
+func _build_home_player_stats() -> Dictionary:
+	var pd: Dictionary = GameState.meta.get("player", {})
+	var cls: String = String(GameState.meta.get("chosen_class", ""))
+	return {
+		"str": int(pd.get("strength", 1)),
+		"agi": int(pd.get("agility", 1)),
+		"vit": int(pd.get("vitality", 0)),
+		"crit": int(pd.get("crit", 0)),
+		"stat_points": 0,
+		"hp": int(pd.get("hp", pd.get("max_hp", 100))),
+		"max_hp": int(pd.get("max_hp", 100)),
+		"chosen_class": cls,
+		"passive_armor_bonus": 0,
+	}
+
+
+func _reload_home_data() -> void:
+	GameState.ensure_save_equipment_shape()
+	inventory = GameState.duplicate_equipment_buckets(GameState.meta["permanent_chest"])
+	equipped = GameState.loadout_as_equipped_dict()
+
+
+func _home_equip_item(slot_key: String, idx: int) -> void:
+	var arr: Array = inventory.get(slot_key, [])
+	if idx < 0 or idx >= arr.size():
+		return
+	var item: Dictionary = arr[idx].duplicate(true)
+	item["permanent"] = true
+
+	var old_eq: Dictionary = equipped.get(slot_key, {})
+	if not old_eq.is_empty():
+		var old_copy: Dictionary = old_eq.duplicate(true)
+		old_copy["permanent"] = true
+		GameState.meta["permanent_chest"][slot_key].append(old_copy)
+
+	GameState.remove_all_items_by_name_from_bucket(
+		GameState.meta["permanent_chest"][slot_key],
+		String(item.get("name", ""))
+	)
+	GameState.run["loadout"][slot_key] = [item.duplicate(true)]
+	equipped[slot_key] = item
+	_reload_home_data()
+	loadout_changed.emit()
+
+
+func _home_unequip_item(slot_key: String) -> void:
+	var item: Dictionary = equipped.get(slot_key, {})
+	if item.is_empty():
+		return
+	var copy: Dictionary = item.duplicate(true)
+	copy["permanent"] = true
+	GameState.meta["permanent_chest"][slot_key].append(copy)
+	GameState.run["loadout"][slot_key] = []
+	equipped[slot_key] = {}
+	_reload_home_data()
+	loadout_changed.emit()
+
 func _on_close() -> void:
 	visible = false
+	if home_mode:
+		home_mode = false
+		_apply_mode_ui()
 	closed.emit()
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -617,7 +713,8 @@ func _refresh_backpack() -> void:
 			all_items.sort_custom(func(a, b): return int(a["item"].get("rarity", 0)) > int(b["item"].get("rarity", 0)))
 
 	if all_items.is_empty():
-		_item_grid.add_child(_make_label("Backpack is empty.", 15, Color(0.45, 0.45, 0.45)))
+		var empty_msg := "No permanent items stored." if home_mode else "Backpack is empty."
+		_item_grid.add_child(_make_label(empty_msg, 15, Color(0.45, 0.45, 0.45)))
 		return
 
 	for entry in all_items:
@@ -708,7 +805,7 @@ func _select_item(item: Dictionary, slot_key: String, idx: int, tile: PanelConta
 
 	_show_item_details(item, slot_key, false, idx)
 	_equip_btn.visible = true
-	_drop_btn.visible  = not bool(item.get("permanent", false))
+	_drop_btn.visible = false if home_mode else not bool(item.get("permanent", false))
 
 func _clear_selection() -> void:
 	selected_item  = {}
@@ -732,12 +829,22 @@ func _input(event: InputEvent) -> void:
 			_finish_drag_item()
 
 func _on_equip() -> void:
-	if selected_idx >= 0:
-		item_equipped.emit(selected_slot, selected_idx)
+	if selected_idx < 0:
+		return
+	if home_mode:
+		_home_equip_item(selected_slot, selected_idx)
 		_clear_selection()
+		_refresh_all_slots()
 		_refresh_backpack()
+		return
+	item_equipped.emit(selected_slot, selected_idx)
+	_clear_selection()
+	_refresh_backpack()
+
 
 func _on_drop() -> void:
+	if home_mode:
+		return
 	if selected_idx >= 0 and not bool(selected_item.get("permanent", false)):
 		item_dropped.emit(selected_slot, selected_idx)
 		_clear_selection()
@@ -909,21 +1016,37 @@ func _finish_drag_item() -> void:
 		return
 	var mouse := get_global_mouse_position()
 	var target_slot := _slot_key_from_global_pos(mouse)
-	if _drag_source == "backpack":
-		# Ułatwienie: drop na postaci = auto-equip do właściwego slota
-		if target_slot == "" and _is_over_character(mouse):
-			target_slot = _drag_slot
-		if target_slot != "" and target_slot == _drag_slot:
-			item_equipped.emit(_drag_slot, _drag_idx)
-			_clear_selection()
-			_refresh_all_slots()
-			_refresh_backpack()
-	elif _drag_source == "equipped":
-		if _backpack_scroll and _backpack_scroll.get_global_rect().has_point(mouse):
-			item_unequipped.emit(_drag_slot)
-			_clear_selection()
-			_refresh_all_slots()
-			_refresh_backpack()
+	if home_mode:
+		if _drag_source == "backpack":
+			if target_slot == "" and _is_over_character(mouse):
+				target_slot = _drag_slot
+			if target_slot != "" and target_slot == _drag_slot:
+				_home_equip_item(_drag_slot, _drag_idx)
+				_clear_selection()
+				_refresh_all_slots()
+				_refresh_backpack()
+		elif _drag_source == "equipped":
+			if _backpack_scroll and _backpack_scroll.get_global_rect().has_point(mouse):
+				_home_unequip_item(_drag_slot)
+				_clear_selection()
+				_refresh_all_slots()
+				_refresh_backpack()
+	else:
+		if _drag_source == "backpack":
+			# Ułatwienie: drop na postaci = auto-equip do właściwego slota
+			if target_slot == "" and _is_over_character(mouse):
+				target_slot = _drag_slot
+			if target_slot != "" and target_slot == _drag_slot:
+				item_equipped.emit(_drag_slot, _drag_idx)
+				_clear_selection()
+				_refresh_all_slots()
+				_refresh_backpack()
+		elif _drag_source == "equipped":
+			if _backpack_scroll and _backpack_scroll.get_global_rect().has_point(mouse):
+				item_unequipped.emit(_drag_slot)
+				_clear_selection()
+				_refresh_all_slots()
+				_refresh_backpack()
 	if _drag_preview and is_instance_valid(_drag_preview):
 		_drag_preview.queue_free()
 	_drag_preview = null

@@ -89,6 +89,11 @@ func play_legacy_roll_animation(
 		return
 	time_scale = clampf(time_scale, 0.25, 1.0)
 
+	if _g.is_inside_tree():
+		var audio := _g.get_node_or_null("/root/GameAudio")
+		if audio:
+			audio.play_dice_roll()
+
 	apply_dice_set_shapes(shape_ids)
 
 	var is_crit := false

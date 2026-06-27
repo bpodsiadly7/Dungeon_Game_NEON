@@ -22,6 +22,8 @@ driver/mix_rate=48000
 [autoload]
 
 GameState="*res://GameState.gd"
+GameAudio="*res://GameAudio.gd"
+SceneTransition="*res://ui/scene_transition.gd"
 BloodCursorEffect="*res://ui/blood_cursor_effect.gd"
 CustomCursor="*res://ui/custom_cursor.gd"
 

@@ -57,20 +57,7 @@ var _unspent_pulse_tween: Tween = null
 # --- Kill context for boss-upgrades ---
 var _last_kill_context: Dictionary = {}
 
-# --- Stats panel refs ---
-@onready var btn_stats: Button = $CanvasLayer/UIRoot/Left/StatsButton
-@onready var stats_panel: PanelContainer = $CanvasLayer/UIRoot/StatsPanel
-@onready var lbl_stats_header: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/LblStatsHeader
-@onready var lbl_str: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer/LblStr
-@onready var btn_str_plus: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer/BtnStrPlus
-@onready var lbl_agi: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2/LblAgi
-@onready var btn_agi_plus: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2/BtnAgiPlus
-@onready var lbl_vit: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3/LblVit
-@onready var btn_vit_plus: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3/BtnVitPlus
-@onready var lbl_crit: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4/LblCrit
-@onready var btn_crit_plus: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4/BtnCritPlus
-@onready var lbl_points: Label = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/LblPoints
-@onready var btn_stats_close: Button = $CanvasLayer/UIRoot/StatsPanel/VBoxContainer/BtnClose
+@onready var btn_stats: Button = get_node_or_null("CanvasLayer/UIRoot/Left/StatsButton")
 @onready var dice_viewport := $DiceViewport  # NIE $CanvasLayer/DiceViewport
 @onready var dice_roller := $DiceViewport/DiceRoller
 @onready var dice_display := $CanvasLayer/UIRoot/DiceDisplay
@@ -553,20 +540,14 @@ func _ready() -> void:
 	player.xp_changed.connect(_on_player_xp_changed)
 	player.level_changed.connect(_on_player_level_changed)
 	player.stats_changed.connect(_on_player_stats_changed)
-	# Przyciski panelu statystyk
-	if btn_stats:       btn_stats.pressed.connect(_toggle_stats_panel)
-	if btn_str_plus:    btn_str_plus.pressed.connect(_on_btn_str_plus)
-	if btn_agi_plus:    btn_agi_plus.pressed.connect(_on_btn_agi_plus)
-	if btn_vit_plus:    btn_vit_plus.pressed.connect(_on_btn_vit_plus)
-	if btn_crit_plus:   btn_crit_plus.pressed.connect(_on_btn_crit_plus)
-	if btn_stats_close: btn_stats_close.pressed.connect(func(): stats_panel.visible = false)
+	if btn_stats:
+		btn_stats.pressed.connect(_toggle_inventory_from_stats_button)
 	# Boss choice dialog
 	if dungeon_choice:
 		dungeon_choice.confirmed.connect(_on_dungeon_choice_confirmed)
 		dungeon_choice.canceled.connect(_on_dungeon_choice_canceled)
 	# Stan startowy panelu
 	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
-	_apply_stats_panel_font_sizes()
 	# Attack (Basic / Safe / Wild)
 	turn = Turn.PLAYER
 	_init_combat_modules()
@@ -609,8 +590,6 @@ func _ready() -> void:
 	# Inventory + UI
 	_load_permanent_items_into_inventory()
 	_sync_player_max_hp_from_gear()
-	_style_stats_panel()
-
 
 	# ===== SKILLS: START =====
 	# Slot [1] = Basic Strike (zastąpiony później przez Power Strike po wyborze Warrior)
@@ -842,7 +821,7 @@ func enter_home() -> void:
 	GameState.meta["visited_dungeons"] = visited_dungeons.duplicate()
 	_strip_all_equipment_bonuses_for_save()
 	GameState.save_player(player, has_evolved, chosen_class)
-	GameState.end_run_to_home()
+	GameState.end_run_to_home(true)
 	GameState.save(GameState.current_slot)
 	get_tree().change_scene_to_file("res://home_scene.tscn")
 
@@ -1041,7 +1020,9 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 		current_enemy_data["name"],
 		current_enemy_data["hp"],
 		current_enemy_data["damage"],
-		current_enemy_data.get("tex", "")
+		current_enemy_data.get("tex", ""),
+		int(current_enemy_data.get("difficulty", 1)),
+		bool(current_enemy_data.get("treasure", false))
 	)
 	_update_labels()
 	_update_near_death_warning()
@@ -1053,6 +1034,10 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 	else:
 		if lbl_log:
 			lbl_log.text = "A wild %s appears!" % data["name"]
+		if _is_current_boss(name):
+			var audio := get_node_or_null("/root/GameAudio")
+			if audio:
+				audio.play_boss_announce()
 
 
 
@@ -1065,6 +1050,10 @@ func _prepare_next_enemy_with_popup() -> void:
 
 	if next_dialog:
 		next_dialog.dialog_text = "Next enemy!: %s" % next_enemy_data["name"]
+		if _is_current_boss(String(next_enemy_data.get("name", ""))):
+			var audio := get_node_or_null("/root/GameAudio")
+			if audio:
+				audio.play_boss_announce()
 		next_dialog.popup_centered()
 	else:
 		_request_spawn(next_enemy_data)
@@ -1330,6 +1319,10 @@ func _apply_player_damage(dmg:int, kind:String = "hit") -> void:
 		show_damage_popup(player, "0", "hit")
 		return
 
+	var audio := get_node_or_null("/root/GameAudio")
+	if audio:
+		audio.play_player_hit(kind == "crit")
+
 	player.take_damage(final_dmg)
 	show_damage_popup(player, str(final_dmg), kind)
 
@@ -1338,6 +1331,10 @@ func _apply_player_damage(dmg:int, kind:String = "hit") -> void:
 func _transition_to_next_enemy() -> void:
 	if btn_attack:
 		btn_attack.disabled = true
+
+	var audio := get_node_or_null("/root/GameAudio")
+	if audio:
+		audio.play_enemy_transition()
 
 	var start_pos: Vector2 = enemy.position
 	var tw_out := get_tree().create_tween()
@@ -1735,6 +1732,7 @@ func _show_game_over_screen() -> void:
 	# Zapisz śmierć w GameState
 	GameState.on_player_death()
 	GameState.save(GameState.current_slot)
+	var colony_lost := GameState.is_colony_defeated()
 
 	# Overlay
 	var overlay := ColorRect.new()
@@ -1774,7 +1772,7 @@ func _show_game_over_screen() -> void:
 
 	# ── Tytuł ──────────────────────────────────────────
 	var title := Label.new()
-	title.text = "☠  GAME OVER  ☠"
+	title.text = "☠  CLAN FALLEN  ☠" if colony_lost else "☠  GAME OVER  ☠"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_color_override("font_color", Color(0.9, 0.22, 0.18))
 	title.add_theme_font_size_override("font_size", 44)
@@ -1835,9 +1833,13 @@ func _show_game_over_screen() -> void:
 		perm_count += (chest[s] as Array).size()
 
 	var perm_note := Label.new()
-	perm_note.text = "💎 %d permanent item(s) safe in your chest." % perm_count
+	if colony_lost:
+		perm_note.text = "No dwarfs remain. Your campaign save will be deleted."
+		perm_note.add_theme_color_override("font_color", Color(0.92, 0.45, 0.35))
+	else:
+		perm_note.text = "💎 %d permanent item(s) safe in your chest." % perm_count
+		perm_note.add_theme_color_override("font_color", Color(0.55, 0.90, 0.45))
 	perm_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	perm_note.add_theme_color_override("font_color", Color(0.55, 0.90, 0.45))
 	perm_note.add_theme_font_size_override("font_size", 16)
 	if DMG_FONT: perm_note.add_theme_font_override("font", DMG_FONT)
 	vbox.add_child(perm_note)
@@ -1849,16 +1851,28 @@ func _show_game_over_screen() -> void:
 	vbox.add_child(btn_row)
 
 	var btn_retry := _make_styled_button("▶  Play Again", Color(0.95, 0.82, 0.30))
-	var btn_home  := _make_styled_button("🏠  Return Home", Color(0.55, 0.75, 1.0))
-	btn_row.add_child(btn_retry)
-	btn_row.add_child(btn_home)
+	var btn_home := _make_styled_button(
+		"Main Menu" if colony_lost else "🏠  Return Home",
+		Color(0.55, 0.75, 1.0) if not colony_lost else Color(0.85, 0.35, 0.22)
+	)
+	if colony_lost:
+		btn_row.add_child(btn_home)
+	else:
+		btn_row.add_child(btn_retry)
+		btn_row.add_child(btn_home)
 
-	btn_retry.pressed.connect(func():
-		get_tree().reload_current_scene()
-	)
-	btn_home.pressed.connect(func():
-		get_tree().change_scene_to_file("res://home_scene.tscn")
-	)
+	if colony_lost:
+		btn_home.pressed.connect(func():
+			GameState.finalize_colony_defeat()
+			get_tree().change_scene_to_file("res://main_menu.tscn")
+		)
+	else:
+		btn_retry.pressed.connect(func():
+			get_tree().reload_current_scene()
+		)
+		btn_home.pressed.connect(func():
+			get_tree().change_scene_to_file("res://home_scene.tscn")
+		)
 
 	$CanvasLayer.add_child(panel)
 
@@ -2056,71 +2070,16 @@ func _switch_to_dungeon(idx:int) -> void:
 
 
 
-# --- Handlery przycisków „+” ---
-func _on_btn_str_plus() -> void:
-	_lock_stats_buttons(true)
-	player.add_strength()
-	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
-	_bump_label(lbl_str)
-	_lock_stats_buttons(false)
-
-func _on_btn_agi_plus() -> void:
-	_lock_stats_buttons(true)
-	player.add_agility()
-	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
-	_bump_label(lbl_agi)
-	_lock_stats_buttons(false)
-
-func _on_btn_vit_plus() -> void:
-	_lock_stats_buttons(true)
-	player.add_vitality()
-	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
-	_bump_label(lbl_vit)
-	_lock_stats_buttons(false)
-
-func _on_btn_crit_plus() -> void:
-	_lock_stats_buttons(true)
-	player.add_crit()
-	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
-	_bump_label(lbl_crit)
-	_lock_stats_buttons(false)
-
-# --- Stats panel handlers ---
-func _toggle_stats_panel() -> void:
-	if not stats_panel:
-		push_warning("Stats panel not found at path CanvasLayer/UIRoot/StatsPanel")
-		return
-	if stats_panel.visible:
-		_hide_stats_panel()
+func _toggle_inventory_from_stats_button() -> void:
+	if inventory_screen and inventory_screen.visible:
+		inventory_screen._on_close()
 	else:
-		_show_stats_panel()
+		open_inventory()
 
-func _show_stats_panel() -> void:
-	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
-	stats_panel.visible = true
-	stats_panel.modulate = Color(1, 1, 1, 0.0)
-	stats_panel.scale = Vector2(1.06, 1.06)
-	stats_panel.move_to_front()
-	var tw := get_tree().create_tween()
-	tw.tween_property(stats_panel, "modulate:a", 1.0, 0.15).from(0.0)
-	tw.parallel().tween_property(stats_panel, "scale", Vector2(1, 1), 0.15)
-	if player.stat_points > 0:
-		_set_attack_buttons_disabled(true)
-
-func _hide_stats_panel() -> void:
-	if not stats_panel:
-		return
-	var tw := get_tree().create_tween()
-	tw.tween_property(stats_panel, "modulate:a", 0.0, 0.12).from(stats_panel.modulate.a)
-	tw.parallel().tween_property(stats_panel, "scale", Vector2(1.02, 1.02), 0.12)
-	await tw.finished
-	stats_panel.visible = false
 
 func _input(event: InputEvent) -> void:
-	if event.is_action_pressed("ui_cancel") and stats_panel and stats_panel.visible:
-		_hide_stats_panel()
 	if event.is_action_pressed("toggle_stats"):
-		_toggle_stats_panel()
+		_toggle_inventory_from_stats_button()
 	if event.is_action_pressed("use_potion"):
 		_use_potion()
 
@@ -2144,36 +2103,17 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 
-	if turn == Turn.PLAYER and not (stats_panel and stats_panel.visible and player.stat_points > 0):
+	if turn == Turn.PLAYER and not (inventory_screen and inventory_screen.visible):
 		_set_attack_buttons_disabled(false)
 
 
 func _on_player_stats_changed(strn:int, agi:int, vit:int, crit:int, points:int) -> void:
-	if lbl_stats_header: lbl_stats_header.text = "Stats"
-	if lbl_str:   lbl_str.text   = "STR: %d"  % strn
-	if lbl_agi:   lbl_agi.text   = "AGI: %d"  % agi
-	if lbl_vit:   lbl_vit.text   = "VIT: %d"  % vit
-	if lbl_crit:  lbl_crit.text  = "CRIT: %d" % crit
-	if lbl_points: lbl_points.text = "Unspent points: %d" % points
-
-	var enable := points > 0
-	if btn_str_plus:  btn_str_plus.disabled  = not enable
-	if btn_agi_plus:  btn_agi_plus.disabled  = not enable
-	if btn_vit_plus:  btn_vit_plus.disabled  = not enable
-	if btn_crit_plus: btn_crit_plus.disabled = not enable
-
-	if points > 0 and stats_panel and stats_panel.visible:
-		_set_attack_buttons_disabled(true)
-	elif turn == Turn.PLAYER:
-		_set_attack_buttons_disabled(false)
-
-	if points <= 0 and stats_panel and stats_panel.visible:
-		stats_panel.visible = false
-		if turn == Turn.PLAYER:
-			_set_attack_buttons_disabled(false)
 	_sync_player_max_hp_from_gear()
 	_update_labels()
 	_update_unspent_points_indicator(points)
+	_sync_inventory_screen_if_open()
+	if inventory_screen and inventory_screen.visible and points <= 0 and turn == Turn.PLAYER:
+		_set_attack_buttons_disabled(false)
 
 func _ensure_unspent_points_label() -> void:
 	if unspent_points_label and is_instance_valid(unspent_points_label):
@@ -2222,51 +2162,6 @@ func _update_unspent_points_indicator(points: int) -> void:
 		_unspent_pulse_tween.parallel().tween_property(unspent_points_label, "modulate:a", 1.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		_unspent_pulse_tween.tween_property(unspent_points_label, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		_unspent_pulse_tween.parallel().tween_property(unspent_points_label, "modulate:a", 0.75, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-
-func _open_stats_panel_auto_on_level_up() -> void:
-	if not stats_panel: return
-	stats_panel.visible = true
-	stats_panel.modulate = Color(1, 1, 1, 0.0)
-	stats_panel.scale = Vector2(1.08, 1.08)
-	var tw := get_tree().create_tween()
-	tw.tween_property(stats_panel, "modulate:a", 1.0, 0.15).from(0.0)
-	tw.parallel().tween_property(stats_panel, "scale", Vector2(1, 1), 0.18)
-	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
-
-# --- Helpers: blokada klików i „bump” animacyjny ---
-func _lock_stats_buttons(state: bool) -> void:
-	if btn_str_plus:  btn_str_plus.disabled  = state
-	if btn_agi_plus:  btn_agi_plus.disabled  = state
-	if btn_vit_plus:  btn_vit_plus.disabled  = state
-	if btn_crit_plus: btn_crit_plus.disabled = state
-
-func _bump_label(lbl: Label) -> void:
-	if lbl == null: return
-	var start_scale := lbl.scale
-	var start_color := lbl.modulate
-	var tw := get_tree().create_tween()
-	tw.tween_property(lbl, "scale", start_scale * Vector2(1.08, 1.08), 0.08).from(start_scale)
-	tw.parallel().tween_property(lbl, "modulate", Color(1, 1, 1, 1), 0.08).from(start_color)
-	tw.tween_interval(0.03)
-	tw.tween_property(lbl, "scale", start_scale, 0.10)
-	tw.parallel().tween_property(lbl, "modulate", start_color, 0.10)
-
-# --- Powiększenie fontów w stats panelu ---
-func _apply_stats_panel_font_sizes() -> void:
-	var header_size := 28
-	var label_size := 22
-	var points_size := 22
-	var button_size := 20
-	if lbl_stats_header:
-		lbl_stats_header.add_theme_font_size_override("font_size", header_size)
-	for l in [lbl_str, lbl_agi, lbl_vit, lbl_crit]:
-		if l:
-			l.add_theme_font_size_override("font_size", label_size)
-	if lbl_points:
-		lbl_points.add_theme_font_size_override("font_size", points_size)
-	for b in [btn_str_plus, btn_agi_plus, btn_vit_plus, btn_crit_plus, btn_stats_close]:
-		if b:
-			b.add_theme_font_size_override("font_size", button_size)
 
 # --- POTIONS: UI i logika ---
 func _update_potions_ui() -> void:
@@ -2327,6 +2222,10 @@ func _use_potion() -> void:
 	player.emit_signal("hp_changed", player.hp, player.max_hp)
 	potions -= 1
 	_update_potions_ui()
+
+	var audio := get_node_or_null("/root/GameAudio")
+	if audio:
+		audio.play_potion_heal()
 
 	show_damage_popup(player, "+" + str(heal), "heal")
 	if player.has_method("play_heal_flash"):
@@ -2566,7 +2465,7 @@ func _on_class_picked(class_key: String) -> void:
 	_update_skills_ui()
 
 	# przywróć Attack jeśli można
-	if turn == Turn.PLAYER and btn_attack and (not stats_panel or not stats_panel.visible):
+	if turn == Turn.PLAYER and btn_attack and (not inventory_screen or not inventory_screen.visible):
 		btn_attack.disabled = false
 
 
@@ -2613,7 +2512,7 @@ func _apply_class_evolution(key: String) -> void:
 	_post_evolution_breath()
 
 	# odblokuj atak jeśli to Twoja tura i nic innego nie blokuje
-	if turn == Turn.PLAYER and btn_attack and (not stats_panel or not stats_panel.visible):
+	if turn == Turn.PLAYER and btn_attack and (not inventory_screen or not inventory_screen.visible):
 		btn_attack.disabled = false
 
 
@@ -2729,19 +2628,8 @@ func _load_permanent_items_into_inventory() -> void:
 		inventory[k] = []
  
 	var loaded := 0
- 
-	# 1) Permanenty z GameState.meta["permanent_chest"]
-	var chest: Dictionary = GameState.meta.get("permanent_chest", {})
-	for slot in GameState.EQUIPMENT_SLOT_KEYS:
-		var arr: Array = chest.get(slot, [])
-		for it in arr:
-			if typeof(it) == TYPE_DICTIONARY:
-				var copy: Dictionary = it.duplicate(true)
-				copy["permanent"] = true
-				inventory[slot].append(copy)
-				loaded += 1
- 
-	# 2) Itemy wzięte z domu (run["loadout"]) — kluczowy fix!
+
+	# Itemy wybrane w bazie (run["loadout"]) — tylko te trafiają do dungeonu.
 	var loadout: Dictionary = GameState.run.get("loadout", {})
 	for slot in GameState.EQUIPMENT_SLOT_KEYS:
 		var arr: Array = loadout.get(slot, [])
@@ -2766,8 +2654,9 @@ func _load_permanent_items_into_inventory() -> void:
 		print("[INVENTORY] First run — equipped Rusty Sword")
 	else:
 		print("[INVENTORY] Loaded %d item(s) from GameState." % loaded)
-		if not inventory["weapon"].is_empty():
-			_equip_item("weapon", 0)
+		for slot in GameState.EQUIPMENT_SLOT_KEYS:
+			if not inventory[slot].is_empty():
+				_equip_item(slot, 0)
 
 
 func _inventory_item_line(it: Dictionary) -> String:
@@ -3350,26 +3239,6 @@ func _gen_random_item(slot_key:String, rarity:int, diff:int) -> Dictionary:
 			return {"type":"misc","name":"Shiny Pebble","rarity":Rarity.COMMON}
 
 
-func _style_stats_panel() -> void:
-	if stats_panel:
-		var sb := _make_stylebox(UI_COL["panel"], UI_COL["border"], 12, 2)
-		stats_panel.add_theme_stylebox_override("panel", sb)
-
-	if lbl_stats_header:
-		lbl_stats_header.add_theme_color_override("font_color", UI_COL["accent"])
-		lbl_stats_header.add_theme_font_size_override("font_size", 24)
-		if DMG_FONT: lbl_stats_header.add_theme_font_override("font", DMG_FONT)
-
-	for l in [lbl_str, lbl_agi, lbl_vit, lbl_crit, lbl_points]:
-		if l:
-			l.add_theme_color_override("font_color", UI_COL["text_dim"])
-
-	for b in [btn_str_plus, btn_agi_plus, btn_vit_plus, btn_crit_plus, btn_stats_close]:
-		if b:
-			b.add_theme_color_override("font_color", Color(0.95,0.95,0.98))
-			b.add_theme_color_override("font_pressed_color", UI_COL["accent"])
-			b.add_theme_font_size_override("font_size", 18)
-
 func _rand_bonus_stat() -> String:
 	return BONUS_STATS[randi() % BONUS_STATS.size()]
 
@@ -3530,8 +3399,16 @@ func _sync_player_max_hp_from_gear() -> void:
 	player.emit_signal("hp_changed", player.hp, player.max_hp)
 
 
+func _sync_run_loadout_from_equipment() -> void:
+	var equipped := {}
+	for slot in GameState.EQUIPMENT_SLOT_KEYS:
+		equipped[slot] = _get_equipped_item_for_slot(slot)
+	GameState.sync_run_loadout_from_equipped(equipped)
+
+
 ## Czyści sloty na postaci przed powrotem do domu (meta zapisuje już czystą bazę — bonusy są tylko z gear).
 func _strip_all_equipment_bonuses_for_save() -> void:
+	_sync_run_loadout_from_equipment()
 	var order: Array[String] = [
 		"necklace", "ring1", "ring2", "gloves", "boots", "armor", "helmet", "weapon",
 	]
@@ -3901,7 +3778,7 @@ func _return_home_after_boss() -> void:
 	print("[BOSS] Returning home — loadout saved to permanent_chest")
 	_strip_all_equipment_bonuses_for_save()
 	GameState.save_player(player, has_evolved, chosen_class)
-	GameState.end_run_to_home()
+	GameState.end_run_to_home(true)
 	GameState.save(1)
 	get_tree().change_scene_to_file("res://home_scene.tscn")
 
@@ -3966,7 +3843,7 @@ func _offer_branch_choice_after_boss() -> void:
 		GameState.meta["visited_dungeons"] = visited_dungeons.duplicate()
 		_strip_all_equipment_bonuses_for_save()
 		GameState.save_player(player, has_evolved, chosen_class)
-		GameState.end_run_to_home()
+		GameState.end_run_to_home(true)
 		GameState.save(GameState.current_slot)
 		get_tree().change_scene_to_file("res://home_scene.tscn")
 	)
@@ -4071,7 +3948,8 @@ func _dev_fill_inventory() -> void:
 
 # wywołaj to w dungeonie z przycisku "Exit to Home"
 func _return_to_home_and_save(slot: int) -> void:
-	GameState.end_run_to_home()
+	_sync_run_loadout_from_equipment()
+	GameState.end_run_to_home(false)
 	GameState.save(slot)
 
 	_sync_inventory_screen_if_open()
@@ -4771,7 +4649,7 @@ func _dev_goto_home() -> void:
 	GameState.meta["visited_dungeons"] = visited_dungeons.duplicate()
 	_strip_all_equipment_bonuses_for_save()
 	GameState.save_player(player, has_evolved, chosen_class)
-	GameState.end_run_to_home()
+	GameState.end_run_to_home(true)
 	GameState.save(GameState.current_slot)
 	get_tree().change_scene_to_file("res://home_scene.tscn")
 
