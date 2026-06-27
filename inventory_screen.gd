@@ -7,6 +7,8 @@ signal item_dropped(slot_key: String, idx: int)
 signal stat_spent(stat_key: String)
 signal item_unequipped(slot_key: String)
 signal item_hovered(item: Dictionary, slot_key: String, idx: int)
+signal shrine_item_confirmed(slot_key: String, idx: int)
+signal shrine_closed
 
 const SLOT_CONFIG := {
 	"helmet":   {"label": "Helmet",   "icon_key": "helmet",   "pos": Vector2(  0, -160)},
@@ -78,6 +80,8 @@ const RARITY_COLORS := [
 	Color(0.30, 1.00, 0.85, 1.0),
 ]
 const RARITY_NAMES := ["Common", "Rare", "Epic", "Legend", "Unique"]
+const SHRINE_TEX_PATH := "res://treasures/shrine.png"
+const SHRINE_DROP_SLOT_SIZE := Vector2(128, 128)
 
 # Muszą być identyczne z main.gd (calc_player_weapon_damage / _calc_player_armor_total).
 const STR_DMG_PER_POINT := 0.04
@@ -117,8 +121,21 @@ var _drag_idx: int = -1
 var _drag_preview: PanelContainer = null
 var _drag_source: String = "" # "backpack" | "equipped"
 var home_mode: bool = false
+var shrine_mode: bool = false
 var _screen_title: Label = null
 var _backpack_title: Label = null
+var _overlay: ColorRect = null
+var _left_panel: Control = null
+var _center_area: Control = null
+var _shrine_bg: TextureRect = null
+var _shrine_drop_slot: PanelContainer = null
+var _shrine_slot_content: VBoxContainer = null
+var _shrine_hint_label: Label = null
+var _shrine_btn_row: HBoxContainer = null
+var _shrine_confirm_btn: Button = null
+var _shrine_cancel_btn: Button = null
+var _shrine_pending_slot: String = ""
+var _shrine_pending_idx: int = -1
 ## Zwraca Texture2D gracza z aktywnego runa (tak samo jak widoczna postać). Jeśli Callable pusty / null — fallback z GameState.
 var _run_player_texture_supplier: Callable = Callable()
 
@@ -144,11 +161,11 @@ func _process(_delta: float) -> void:
 		_drag_preview.global_position = get_global_mouse_position() + Vector2(12, 12)
 
 func _build_ui() -> void:
-	var overlay := ColorRect.new()
-	overlay.color = Color(0, 0, 0, 0.72)
-	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(overlay)
+	_overlay = ColorRect.new()
+	_overlay.color = Color(0, 0, 0, 0.72)
+	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_overlay)
 
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(1200, 660)
@@ -198,6 +215,7 @@ func _build_left_panel(parent: HBoxContainer) -> void:
 	vbox.custom_minimum_size = Vector2(200, 0)
 	vbox.add_theme_constant_override("separation", 8)
 	parent.add_child(vbox)
+	_left_panel = vbox
 
 	var title := _make_label("STATISTICS", 16, Color(0.95, 0.82, 0.30))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -285,6 +303,40 @@ func _build_center_panel(parent: HBoxContainer) -> void:
 	area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	area.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	parent.add_child(area)
+	_center_area = area
+
+	_shrine_bg = TextureRect.new()
+	if ResourceLoader.exists(SHRINE_TEX_PATH):
+		_shrine_bg.texture = load(SHRINE_TEX_PATH) as Texture2D
+	_shrine_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_shrine_bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_shrine_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_shrine_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_shrine_bg.visible = false
+	area.add_child(_shrine_bg)
+
+	_shrine_drop_slot = PanelContainer.new()
+	_shrine_drop_slot.custom_minimum_size = SHRINE_DROP_SLOT_SIZE
+	_shrine_drop_slot.set_anchors_preset(Control.PRESET_CENTER)
+	_shrine_drop_slot.offset_left = -SHRINE_DROP_SLOT_SIZE.x * 0.5
+	_shrine_drop_slot.offset_right = SHRINE_DROP_SLOT_SIZE.x * 0.5
+	_shrine_drop_slot.offset_top = -SHRINE_DROP_SLOT_SIZE.y * 0.5
+	_shrine_drop_slot.offset_bottom = SHRINE_DROP_SLOT_SIZE.y * 0.5
+	_shrine_drop_slot.visible = false
+	_set_panel_border(_shrine_drop_slot, Color(1.0, 0.85, 0.35))
+	area.add_child(_shrine_drop_slot)
+
+	var shrine_vbox := VBoxContainer.new()
+	shrine_vbox.add_theme_constant_override("separation", 6)
+	shrine_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	_shrine_drop_slot.add_child(shrine_vbox)
+	_shrine_slot_content = shrine_vbox
+
+	_shrine_hint_label = _make_label("Drag item here\nto sanctify", 12, Color(0.95, 0.88, 0.55))
+	_shrine_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_shrine_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_shrine_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_shrine_slot_content.add_child(_shrine_hint_label)
 
 	var char_tex := TextureRect.new()
 	char_tex.name = "CharSprite"
@@ -422,8 +474,30 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 	_style_action_btn(_drop_btn, Color(0.75, 0.25, 0.20))
 	btn_row.add_child(_drop_btn)
 
+	_shrine_btn_row = HBoxContainer.new()
+	_shrine_btn_row.add_theme_constant_override("separation", 10)
+	_shrine_btn_row.visible = false
+	det_vbox.add_child(_shrine_btn_row)
+
+	_shrine_confirm_btn = Button.new()
+	_shrine_confirm_btn.text = "MAKE PERMANENT"
+	_shrine_confirm_btn.custom_minimum_size = Vector2(180, 38)
+	_shrine_confirm_btn.focus_mode = Control.FOCUS_NONE
+	_shrine_confirm_btn.pressed.connect(_on_shrine_confirm_pressed)
+	_style_action_btn(_shrine_confirm_btn, Color(0.55, 0.90, 0.45))
+	_shrine_btn_row.add_child(_shrine_confirm_btn)
+
+	_shrine_cancel_btn = Button.new()
+	_shrine_cancel_btn.text = "REMOVE"
+	_shrine_cancel_btn.custom_minimum_size = Vector2(120, 38)
+	_shrine_cancel_btn.focus_mode = Control.FOCUS_NONE
+	_shrine_cancel_btn.pressed.connect(_clear_shrine_offer)
+	_style_action_btn(_shrine_cancel_btn, Color(0.75, 0.25, 0.20))
+	_shrine_btn_row.add_child(_shrine_cancel_btn)
+
 func open(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
 	home_mode = false
+	shrine_mode = false
 	_apply_mode_ui()
 	inventory    = inv
 	equipped     = eq
@@ -437,8 +511,26 @@ func open(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
 	move_to_front()
 
 
+func open_shrine(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
+	home_mode = false
+	shrine_mode = true
+	inventory = inv
+	equipped = eq
+	player_stats = stats
+	_clear_shrine_offer()
+	_apply_mode_ui()
+	_sync_char_portrait()
+	_refresh_stats()
+	_refresh_all_slots()
+	_refresh_backpack()
+	_clear_selection()
+	visible = true
+	move_to_front()
+
+
 func open_home_loadout() -> void:
 	home_mode = true
+	shrine_mode = false
 	_apply_mode_ui()
 	_reload_home_data()
 	player_stats = _build_home_player_stats()
@@ -453,15 +545,49 @@ func open_home_loadout() -> void:
 
 func _apply_mode_ui() -> void:
 	if _screen_title:
-		_screen_title.text = "LOADOUT" if home_mode else "INVENTORY"
+		if shrine_mode:
+			_screen_title.text = "SACRED SHRINE"
+		elif home_mode:
+			_screen_title.text = "LOADOUT"
+		else:
+			_screen_title.text = "INVENTORY"
 	if _backpack_title:
-		_backpack_title.text = "PERMANENT STORAGE" if home_mode else "BACKPACK"
+		if shrine_mode:
+			_backpack_title.text = "YOUR ITEMS"
+		elif home_mode:
+			_backpack_title.text = "PERMANENT STORAGE"
+		else:
+			_backpack_title.text = "BACKPACK"
+	if _overlay:
+		_overlay.color = Color(0, 0, 0, 0.58) if shrine_mode else Color(0, 0, 0, 0.72)
+	if _left_panel:
+		_left_panel.visible = not shrine_mode
 	for key in _stats_plus_buttons:
 		var btn: Button = _stats_plus_buttons[key]
 		if btn:
-			btn.visible = not home_mode
+			btn.visible = not home_mode and not shrine_mode
 	if _equip_btn:
 		_equip_btn.text = "TAKE" if home_mode else "EQUIP"
+		_equip_btn.visible = not shrine_mode
+	if _drop_btn:
+		_drop_btn.visible = not shrine_mode
+	if _shrine_btn_row:
+		_shrine_btn_row.visible = shrine_mode and _shrine_pending_idx >= 0
+	_apply_center_mode_visibility()
+
+
+func _apply_center_mode_visibility() -> void:
+	var show_gear := not shrine_mode
+	if _char_sprite and is_instance_valid(_char_sprite):
+		_char_sprite.visible = show_gear
+	for slot_key in _slot_panels:
+		var panel: PanelContainer = _slot_panels[slot_key]
+		if panel and is_instance_valid(panel):
+			panel.visible = show_gear
+	if _shrine_bg and is_instance_valid(_shrine_bg):
+		_shrine_bg.visible = shrine_mode
+	if _shrine_drop_slot and is_instance_valid(_shrine_drop_slot):
+		_shrine_drop_slot.visible = shrine_mode
 
 
 func _build_home_player_stats() -> Dictionary:
@@ -522,14 +648,25 @@ func _home_unequip_item(slot_key: String) -> void:
 	loadout_changed.emit()
 
 func _on_close() -> void:
+	var was_shrine := shrine_mode
 	visible = false
+	if shrine_mode:
+		shrine_mode = false
 	if home_mode:
 		home_mode = false
-		_apply_mode_ui()
+	_apply_mode_ui()
+	_clear_shrine_offer()
 	closed.emit()
+	if was_shrine:
+		shrine_closed.emit()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not visible:
+		return
+	if shrine_mode:
+		if event.is_action_pressed("ui_cancel"):
+			_on_close()
+			get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("toggle_inventory") or event.is_action_pressed("ui_cancel"):
 		_on_close()
@@ -702,7 +839,7 @@ func _refresh_backpack() -> void:
 		for i in arr.size():
 			var item: Dictionary = arr[i]
 			var eq_item: Dictionary = equipped.get(slot_key, {})
-			if not eq_item.is_empty() and eq_item.get("name", "") == item.get("name", ""):
+			if not shrine_mode and not eq_item.is_empty() and eq_item.get("name", "") == item.get("name", ""):
 				continue
 			all_items.append({"item": item, "slot": slot_key, "idx": i})
 
@@ -713,7 +850,7 @@ func _refresh_backpack() -> void:
 			all_items.sort_custom(func(a, b): return int(a["item"].get("rarity", 0)) > int(b["item"].get("rarity", 0)))
 
 	if all_items.is_empty():
-		var empty_msg := "No permanent items stored." if home_mode else "Backpack is empty."
+		var empty_msg := "No items to sanctify." if shrine_mode else ("No permanent items stored." if home_mode else "Backpack is empty.")
 		_item_grid.add_child(_make_label(empty_msg, 15, Color(0.45, 0.45, 0.45)))
 		return
 
@@ -754,6 +891,9 @@ func _refresh_backpack() -> void:
 			var perm := _make_label("*", 11, Color(0.55, 0.90, 0.45))
 			perm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			vbox.add_child(perm)
+
+		if shrine_mode and bool(item.get("permanent", false)):
+			tile.modulate = Color(0.55, 0.55, 0.55, 0.65)
 
 		var captured_item: Dictionary = item.duplicate(true)
 		var captured_slot: String     = slot_key
@@ -804,8 +944,12 @@ func _select_item(item: Dictionary, slot_key: String, idx: int, tile: PanelConta
 	_set_panel_border(tile, Color(1, 1, 1))
 
 	_show_item_details(item, slot_key, false, idx)
-	_equip_btn.visible = true
-	_drop_btn.visible = false if home_mode else not bool(item.get("permanent", false))
+	if shrine_mode:
+		_equip_btn.visible = false
+		_drop_btn.visible = false
+	else:
+		_equip_btn.visible = true
+		_drop_btn.visible = false if home_mode else not bool(item.get("permanent", false))
 
 func _clear_selection() -> void:
 	selected_item  = {}
@@ -986,6 +1130,8 @@ func _fmt_delta(delta: float, with_percent: bool) -> String:
 	return "[color=%s]%s[/color]" % [col, text]
 
 func _start_drag_item(item: Dictionary, slot_key: String, idx: int, border_col: Color, source: String) -> void:
+	if shrine_mode and bool(item.get("permanent", false)):
+		return
 	_dragging = true
 	_drag_item = item.duplicate(true)
 	_drag_slot = slot_key
@@ -1015,6 +1161,14 @@ func _finish_drag_item() -> void:
 	if not _dragging:
 		return
 	var mouse := get_global_mouse_position()
+	if shrine_mode:
+		if _drag_source == "backpack" and _is_over_shrine_drop_slot(mouse):
+			if not bool(_drag_item.get("permanent", false)):
+				_stage_shrine_offer(_drag_slot, _drag_idx)
+			elif _item_name:
+				_item_name.text = "Already permanent"
+		_cleanup_drag()
+		return
 	var target_slot := _slot_key_from_global_pos(mouse)
 	if home_mode:
 		if _drag_source == "backpack":
@@ -1047,6 +1201,11 @@ func _finish_drag_item() -> void:
 				_clear_selection()
 				_refresh_all_slots()
 				_refresh_backpack()
+				_refresh_all_slots()
+				_refresh_backpack()
+	_cleanup_drag()
+
+func _cleanup_drag() -> void:
 	if _drag_preview and is_instance_valid(_drag_preview):
 		_drag_preview.queue_free()
 	_drag_preview = null
@@ -1055,6 +1214,65 @@ func _finish_drag_item() -> void:
 	_drag_slot = ""
 	_drag_idx = -1
 	_drag_source = ""
+
+func _is_over_shrine_drop_slot(global_pos: Vector2) -> bool:
+	if _shrine_drop_slot == null or not is_instance_valid(_shrine_drop_slot) or not _shrine_drop_slot.visible:
+		return false
+	return _shrine_drop_slot.get_global_rect().has_point(global_pos)
+
+func _stage_shrine_offer(slot_key: String, idx: int) -> void:
+	var arr: Array = inventory.get(slot_key, [])
+	if idx < 0 or idx >= arr.size():
+		return
+	var item: Dictionary = arr[idx]
+	if bool(item.get("permanent", false)):
+		return
+	_shrine_pending_slot = slot_key
+	_shrine_pending_idx = idx
+	_refresh_shrine_slot_visual(item)
+	_show_item_details(item, slot_key, false, idx)
+	if _shrine_btn_row:
+		_shrine_btn_row.visible = true
+
+func _clear_shrine_offer() -> void:
+	_shrine_pending_slot = ""
+	_shrine_pending_idx = -1
+	_refresh_shrine_slot_visual({})
+	if _shrine_btn_row:
+		_shrine_btn_row.visible = false
+
+func _refresh_shrine_slot_visual(item: Dictionary) -> void:
+	if _shrine_slot_content == null:
+		return
+	for child in _shrine_slot_content.get_children():
+		child.queue_free()
+	if item.is_empty():
+		_shrine_hint_label = _make_label("Drag item here\nto sanctify", 12, Color(0.95, 0.88, 0.55))
+		_shrine_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_shrine_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_shrine_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_shrine_slot_content.add_child(_shrine_hint_label)
+		return
+	var r: int = clamp(int(item.get("rarity", 0)), 0, RARITY_COLORS.size() - 1)
+	var col: Color = RARITY_COLORS[r]
+	var tex: Texture2D = _resolve_icon(item)
+	if tex:
+		var tr := TextureRect.new()
+		tr.texture = tex
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.custom_minimum_size = Vector2(56, 56)
+		tr.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		_shrine_slot_content.add_child(tr)
+	var name_lbl := _make_label(str(item.get("name", "?")), 11, col)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_shrine_slot_content.add_child(name_lbl)
+
+func _on_shrine_confirm_pressed() -> void:
+	if not shrine_mode or _shrine_pending_idx < 0 or _shrine_pending_slot == "":
+		return
+	shrine_item_confirmed.emit(_shrine_pending_slot, _shrine_pending_idx)
 
 func _is_over_character(global_pos: Vector2) -> bool:
 	if _char_sprite == null or not is_instance_valid(_char_sprite):

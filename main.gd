@@ -390,16 +390,9 @@ const TREASURE_EVENT_CHANCE := 0.10  # 10% szansy zamiast przeciwnika (zmień, j
 const TREASURE_TEX := "res://treasures/mystery_chest.png"  # opcjonalna grafika skrzyni
 
 const SHRINE_CHANCE: float = 0.10  # TESTOWO (łatwo wywołać). Po teście zmień np. na 0.10.
-var shrine_dialog: AcceptDialog
-var shrine_list_box: VBoxContainer
-var shrine_preview: RichTextLabel
-var _shrine_pending_key: String = ""
-var _shrine_pending_idx: int = -1
-var _shrine_confirm_overlay: ColorRect = null
-var _shrine_confirm_panel: PanelContainer = null
-var _shrine_dialog_open: bool = false
+var _shrine_open: bool = false
 var _shrine_locked: bool = false
-var _shrine_in_progress: bool = false 
+var _shrine_in_progress: bool = false
 var shrine_cooldown: int = 0              # ile zwykłych walk jeszcze blokuje Shrine
 var _encounter_replaced_by_event: bool = false  # czy aktualny encounter to event (Shrine/Chest)
 
@@ -669,6 +662,8 @@ func _ready() -> void:
 	# Podłącz inventory screen
 	if inventory_screen:
 		inventory_screen.closed.connect(_on_inventory_closed)
+		inventory_screen.shrine_item_confirmed.connect(_on_shrine_item_confirmed)
+		inventory_screen.shrine_closed.connect(_on_shrine_closed)
 		inventory_screen.item_equipped.connect(_on_inventory_equip)
 		inventory_screen.item_dropped.connect(_on_inventory_drop)
 		inventory_screen.item_unequipped.connect(_on_inventory_unequip)
@@ -733,31 +728,39 @@ func _sync_inventory_screen_if_open() -> void:
 	inventory_screen._refresh_backpack()
 
 
+func _inventory_ui_stats() -> Dictionary:
+	var e := _player_effective_stat_pack_for_ui()
+	return {
+		"str": int(e["str"]),
+		"agi": int(e["agi"]),
+		"vit": int(e["vit"]),
+		"crit": int(e["crit"]),
+		"stat_points": player.stat_points,
+		"hp": player.hp,
+		"max_hp": player.max_hp,
+		"chosen_class": chosen_class,
+		"passive_armor_bonus": passive_armor_bonus,
+	}
+
+
+func _inventory_ui_equipped() -> Dictionary:
+	return {
+		"weapon": weapon,
+		"armor": equipped_armor,
+		"helmet": equipped_helmet,
+		"necklace": equipped_necklace,
+		"gloves": equipped_gloves,
+		"boots": equipped_boots,
+		"ring1": equipped_ring1,
+		"ring2": equipped_ring2,
+	}
+
+
 func open_inventory() -> void:
+	if _shrine_open:
+		return
 	if inventory_screen:
-		var e := _player_effective_stat_pack_for_ui()
-		var stats := {
-			"str": int(e["str"]),
-			"agi": int(e["agi"]),
-			"vit": int(e["vit"]),
-			"crit": int(e["crit"]),
-			"stat_points": player.stat_points,
-			"hp":     player.hp,
-			"max_hp": player.max_hp,
-			"chosen_class": chosen_class,
-			"passive_armor_bonus": passive_armor_bonus,
-		}
-		var eq := {
-			"weapon":   weapon,
-			"armor":    equipped_armor,
-			"helmet":   equipped_helmet,
-			"necklace": equipped_necklace,
-			"gloves":   equipped_gloves,
-			"boots":    equipped_boots,
-			"ring1":    equipped_ring1,
-			"ring2":    equipped_ring2,
-		}
-		inventory_screen.open(inventory, eq, stats)
+		inventory_screen.open(inventory, _inventory_ui_equipped(), _inventory_ui_stats())
 		_set_inventory_paused(true)
 
 func _on_inventory_closed() -> void:
@@ -4003,357 +4006,72 @@ func _continue_run_after_event_async() -> void:
 		return
 	await _transition_to_next_enemy()
 
-func _ensure_shrine_dialog() -> void:
-	if shrine_dialog and is_instance_valid(shrine_dialog):
-		print("[SHRINE_DEBUG] Shrine dialog already exists.")
-		return
-
-	var parent_ctrl: Node = null
-	if has_node("CanvasLayer/UIRoot"):
-		parent_ctrl = $CanvasLayer/UIRoot
-	elif has_node("CanvasLayer"):
-		parent_ctrl = $CanvasLayer
-	else:
-		parent_ctrl = self
-
-	shrine_dialog = AcceptDialog.new()
-	shrine_dialog.title = "Sacred Shrine"
-	shrine_dialog.min_size = Vector2(680, 420)
-	shrine_dialog.dialog_hide_on_ok = false  # sami wołamy kontynuację
-
-	# layout
-	var header := VBoxContainer.new()
-	header.add_theme_constant_override("separation", 10)
-	shrine_dialog.add_child(header)
-
-	var title_lbl := Label.new()
-	title_lbl.text = "Choose an item to make PERMANENT"
-	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	header.add_child(title_lbl)
-
-	var body := HBoxContainer.new()
-	body.add_theme_constant_override("separation", 12)
-	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	body.size_flags_vertical   = Control.SIZE_EXPAND_FILL
-	header.add_child(body)
-
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical   = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size = Vector2(380, 0)
-	body.add_child(scroll)
-
-	shrine_list_box = VBoxContainer.new()
-	shrine_list_box.add_theme_constant_override("separation", 8)
-	scroll.add_child(shrine_list_box)
-
-	var preview_panel := PanelContainer.new()
-	preview_panel.custom_minimum_size = Vector2(260, 0)
-	preview_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_child(preview_panel)
-
-	var pvbox := VBoxContainer.new()
-	pvbox.add_theme_constant_override("separation", 8)
-	preview_panel.add_child(pvbox)
-
-	var ptitle := Label.new()
-	ptitle.text = "Preview"
-	ptitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	ptitle.add_theme_font_size_override("font_size", 18)
-	pvbox.add_child(ptitle)
-
-	shrine_preview = RichTextLabel.new()
-	shrine_preview.bbcode_enabled = true
-	shrine_preview.fit_content = false
-	shrine_preview.scroll_active = true
-	shrine_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	shrine_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	shrine_preview.text = "Hover an item to preview its stats."
-	pvbox.add_child(shrine_preview)
-
-	# przycisk wyjścia
-	shrine_dialog.add_button("Leave the Shrine", true, "leave")
-
-	# sygnały
-	shrine_dialog.canceled.connect(func():
-		_shrine_dialog_open = false
-		_shrine_in_progress = false
-		# opcjonalnie: jeśli chcesz cooldown także po „Leave”
-		if shrine_cooldown <= 0:
-			shrine_cooldown = 6           # ← ile walk pauzy po opuszczeniu bez wyboru
-		_continue_run_after_event()
-	)
-
-	shrine_dialog.custom_action.connect(func(action: String):
-		if action == "leave":
-			_shrine_dialog_open = false
-			_shrine_in_progress = false
-			if shrine_cooldown <= 0:
-				shrine_cooldown = 6       # j.w.
-			_continue_run_after_event()
-	)
-
-
-	print("[SHRINE_DEBUG] Creating new shrine_dialog under:", parent_ctrl.name)
-	parent_ctrl.call_deferred("add_child", shrine_dialog)
-
-
 func _open_shrine_dialog() -> void:
-	print("[SHRINE_DEBUG] Opening Shrine Dialog... (start)")
-	_ensure_shrine_dialog()
-
 	if not _has_any_items_in_inventory():
-		_shrine_dialog_open = false
+		_shrine_open = false
+		_shrine_in_progress = false
+		call_deferred("_continue_run_after_event")
+		return
+	if inventory_screen == null:
 		_shrine_in_progress = false
 		call_deferred("_continue_run_after_event")
 		return
 
-	_shrine_dialog_open = true
+	_shrine_open = true
 	_shrine_locked = false
-	_fill_shrine_dialog_items()
-	call_deferred("_popup_shrine_dialog")
+	inventory_screen.open_shrine(inventory, _inventory_ui_equipped(), _inventory_ui_stats())
+	_set_inventory_paused(true)
 
 
+func _on_shrine_item_confirmed(slot_key: String, idx: int) -> void:
+	_on_shrine_pick_permanent(slot_key, idx)
 
 
-func _popup_shrine_dialog() -> void:
-	if shrine_dialog and is_instance_valid(shrine_dialog):
-		print("[SHRINE_DEBUG] Popup shrine dialog centered")
-		shrine_dialog.popup_centered_ratio(0.6)
+func _on_shrine_closed() -> void:
+	_set_inventory_paused(false)
+	_shrine_open = false
+	_shrine_in_progress = false
+	if shrine_cooldown <= 0:
+		shrine_cooldown = 6
+	_continue_run_after_event()
 
 
-
-func _fill_shrine_dialog_items() -> void:
-	if not shrine_list_box:
-		return
-
-	# wipe
-	for c in shrine_list_box.get_children():
-		c.queue_free()
-
-	var keys: Array[String] = ["weapon","armor","helmet","necklace","gloves","boots","ring1","ring2"]
-	var any_added := false
-
-	for k in keys:
-		var arr: Array = inventory.get(k, []) as Array
-		if arr.is_empty():
-			continue
-
-		var head := Label.new()
-		head.text = k.to_upper()
-		head.add_theme_color_override("font_color", Color(1, 0.92, 0.60))
-		shrine_list_box.add_child(head)
-
-		for i in arr.size():
-			var it: Dictionary = arr[i]
-
-			var row := HBoxContainer.new()
-			row.add_theme_constant_override("separation", 10)
-			row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-			var lbl := Label.new()
-			var nm := str(it.get("name","?"))
-			var rar := _rarity_name(int(it.get("rarity", Rarity.COMMON)))
-			var eq := ""
-			if _is_item_equipped(k, i):
-				eq = " (equipped)"
-			lbl.text = "%s [%s]%s" % [nm, rar, eq]
-			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			row.add_child(lbl)
-
-			var btn := Button.new()
-			btn.text = "Make Permanent"
-			btn.disabled = bool(it.get("permanent", false))
-			btn.pressed.connect(func(_k:=k, _idx:=i):
-				_open_shrine_confirm(_k, _idx)
-			)
-			row.add_child(btn)
-
-			# Preview on hover
-			var captured_k := k
-			var captured_idx := i
-			row.mouse_entered.connect(func():
-				_update_shrine_preview(captured_k, captured_idx)
-			)
-
-			shrine_list_box.add_child(row)
-			any_added = true
-
-	if not any_added:
-		var info := Label.new()
-		info.text = "(No items to choose)"
-		info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		shrine_list_box.add_child(info)
-	if shrine_preview:
-		shrine_preview.text = "Hover an item to preview its stats."
-
-func _update_shrine_preview(slot_key: String, idx: int) -> void:
-	if not shrine_preview:
-		return
-	var items: Array = inventory.get(slot_key, [])
-	if idx < 0 or idx >= items.size():
-		shrine_preview.text = ""
-		return
-	var it: Dictionary = items[idx]
-	shrine_preview.text = _shrine_item_details_bbcode(it, slot_key)
-
-func _shrine_item_details_bbcode(it: Dictionary, slot_key: String) -> String:
-	var rar := int(it.get("rarity", Rarity.COMMON))
-	var name := String(it.get("name", "?"))
-	var header := "[b]%s[/b]  [color=%s](%s)[/color]" % [_bb_escape(name), _bb_color_hex(RARITY_COLORS.get(rar, Color.WHITE)), _rarity_name(rar)]
-	var body := _bb_escape(_inventory_item_line(it))
-	if String(it.get("armor_type","")) != "":
-		body += "\nType: %s" % String(it.get("armor_type","")).capitalize()
-	if bool(it.get("permanent", false)):
-		body += "\n[color=#54D17A][b]PERMANENT[/b][/color]"
-	return header + "\n" + body
-
-func _bb_color_hex(c: Color) -> String:
-	return "%02x%02x%02x" % [int(c.r * 255.0), int(c.g * 255.0), int(c.b * 255.0)]
-
-func _bb_escape(s: String) -> String:
-	return s.replace("[", "\\[").replace("]", "\\]")
-
-func _open_shrine_confirm(slot_key: String, idx: int) -> void:
-	if _shrine_locked:
-		return
-	var items: Array = inventory.get(slot_key, [])
-	if idx < 0 or idx >= items.size():
-		return
-	var it: Dictionary = items[idx]
-	if bool(it.get("permanent", false)):
-		return
-
-	_shrine_pending_key = slot_key
-	_shrine_pending_idx = idx
-
-	# overlay
-	if _shrine_confirm_overlay and is_instance_valid(_shrine_confirm_overlay):
-		_shrine_confirm_overlay.queue_free()
-	if _shrine_confirm_panel and is_instance_valid(_shrine_confirm_panel):
-		_shrine_confirm_panel.queue_free()
-
-	_shrine_confirm_overlay = ColorRect.new()
-	_shrine_confirm_overlay.color = Color(0, 0, 0, 0.6)
-	_shrine_confirm_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_shrine_confirm_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	shrine_dialog.add_child(_shrine_confirm_overlay)
-
-	_shrine_confirm_panel = PanelContainer.new()
-	_shrine_confirm_panel.custom_minimum_size = Vector2(520, 260)
-	_shrine_confirm_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_shrine_confirm_panel.offset_left = -260
-	_shrine_confirm_panel.offset_right = 260
-	_shrine_confirm_panel.offset_top = -130
-	_shrine_confirm_panel.offset_bottom = 130
-	shrine_dialog.add_child(_shrine_confirm_panel)
-
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 10)
-	_shrine_confirm_panel.add_child(v)
-
-	var t := Label.new()
-	t.text = "Make this item PERMANENT?"
-	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	t.add_theme_font_size_override("font_size", 20)
-	v.add_child(t)
-
-	var rt := RichTextLabel.new()
-	rt.bbcode_enabled = true
-	rt.fit_content = false
-	rt.scroll_active = true
-	rt.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	rt.text = _shrine_item_details_bbcode(it, slot_key)
-	v.add_child(rt)
-
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 10)
-	v.add_child(row)
-
-	var ok := Button.new()
-	ok.text = "Confirm"
-	ok.pressed.connect(_confirm_shrine_permanent)
-	row.add_child(ok)
-
-	var cancel := Button.new()
-	cancel.text = "Cancel"
-	cancel.pressed.connect(_cancel_shrine_confirm)
-	row.add_child(cancel)
-
-	_shrine_confirm_panel.modulate.a = 0.0
-	_shrine_confirm_panel.scale = Vector2(1.05, 1.05)
-	var tw := get_tree().create_tween()
-	tw.tween_property(_shrine_confirm_panel, "modulate:a", 1.0, 0.12).from(0.0)
-	tw.parallel().tween_property(_shrine_confirm_panel, "scale", Vector2.ONE, 0.12).from(_shrine_confirm_panel.scale)
-
-func _cancel_shrine_confirm() -> void:
-	if _shrine_confirm_panel and is_instance_valid(_shrine_confirm_panel):
-		_shrine_confirm_panel.queue_free()
-	if _shrine_confirm_overlay and is_instance_valid(_shrine_confirm_overlay):
-		_shrine_confirm_overlay.queue_free()
-	_shrine_pending_key = ""
-	_shrine_pending_idx = -1
-
-func _confirm_shrine_permanent() -> void:
-	if _shrine_pending_key == "" or _shrine_pending_idx < 0:
-		_cancel_shrine_confirm()
-		return
-	_on_shrine_pick_permanent(_shrine_pending_key, _shrine_pending_idx)
-	_cancel_shrine_confirm()
-
-
-
-func _on_shrine_pick_permanent(slot_key:String, idx:int) -> void:
+func _on_shrine_pick_permanent(slot_key: String, idx: int) -> void:
 	if _shrine_locked:
 		return
 	_shrine_locked = true
-	
-	# blokujemy wszystkie przyciski w dialogu
-	for row in shrine_list_box.get_children():
-		for ch in row.get_children():
-			if ch is Button:
-				ch.disabled = true
-	
-	var items:Array = inventory.get(slot_key, [])
+
+	var items: Array = inventory.get(slot_key, [])
 	if idx < 0 or idx >= items.size():
-		_close_shrine_and_continue()
+		_finish_shrine_after_pick()
 		return
-	
-	var it:Dictionary = items[idx]
+
+	var it: Dictionary = items[idx]
 	if it.get("permanent", false):
-		_close_shrine_and_continue()
+		_finish_shrine_after_pick()
 		return
-	
-	# ZAPISUJEMY jako permanent (przez GameState.meta, żeby save() to uwzględnił)
+
 	GameState.make_permanent(slot_key, it)
-	
-	# oznaczamy w bieżącym runie
 	it["permanent"] = true
-	
+
 	_show_toast("Item '" + str(it.get("name", "?")) + "' is now PERMANENT!")
-	
-	# cooldown po udanym wyborze
-	shrine_cooldown = max(shrine_cooldown, 8)  # możesz zmienić na 6/10
-	
-	# odśwież UI
-	_sync_inventory_screen_if_open()
-	
-	# zamykamy i idziemy dalej
-	if shrine_dialog:
-		shrine_dialog.hide()
-	_shrine_dialog_open = false
+	shrine_cooldown = max(shrine_cooldown, 8)
+	_finish_shrine_after_pick()
+
+
+func _finish_shrine_after_pick() -> void:
+	_shrine_open = false
 	_shrine_in_progress = false
-	
+	_shrine_locked = false
+	if inventory_screen and inventory_screen.visible:
+		inventory_screen.shrine_mode = false
+		inventory_screen.visible = false
+		inventory_screen._apply_mode_ui()
+		inventory_screen._clear_shrine_offer()
+		inventory_screen.closed.emit()
+	_set_inventory_paused(false)
 	_continue_run_after_event()
 
-func _close_shrine_and_continue() -> void:
-	if shrine_dialog:
-		shrine_dialog.hide()
-	_shrine_dialog_open = false
-	_shrine_in_progress = false
-	_continue_run_after_event()
 
 func _has_any_items_in_inventory() -> bool:
 	for k in GameState.EQUIPMENT_SLOT_KEYS:
@@ -4378,7 +4096,7 @@ func _request_spawn(data: Dictionary) -> void:
 
 	if __is_shrine:
 		# już trwa? ignoruj kolejne zgłoszenia
-		if _shrine_in_progress or _shrine_dialog_open:
+		if _shrine_in_progress or _shrine_open:
 			print("[SHRINE_DEBUG] shrine request ignored (already in progress)")
 			return
 
@@ -4679,7 +4397,7 @@ func _dev_spawn_boss() -> void:
 	_show_toast("💀 " + boss_name + " appears!", 1.5)
 
 func _dev_trigger_shrine() -> void:
-	if _shrine_in_progress or _shrine_dialog_open:
+	if _shrine_in_progress or _shrine_open:
 		_show_toast("Shrine is already running!", 1.0)
 		return
 	_dev_toggle_panel()
