@@ -126,6 +126,51 @@ const CLASS_TEXTURES := {
 	"barbarian": "res://player_classes/dwarf_barbarian.png",
 }
 
+const CLASS_EVOLUTION_INFO := {
+	"warrior": {
+		"name": "Warrior",
+		"tagline": "Iron master of the blade.",
+		"active": "Power Strike — guaranteed critical hit (costs 10% HP).",
+		"passive": "Weapon Mastery — +10% weapon damage.",
+		"accent": Color(0.95, 0.55, 0.35),
+	},
+	"assassin": {
+		"name": "Assassin",
+		"tagline": "Swift and unseen.",
+		"active": "Quick Slash — two fast hits (60–100% dmg each).",
+		"passive": "Cat Movement — 5% chance to dodge a hit.",
+		"accent": Color(0.45, 0.90, 0.65),
+	},
+	"guardian": {
+		"name": "Guardian",
+		"tagline": "Unbreakable bulwark.",
+		"active": "Shield — block the next incoming hit.",
+		"passive": "Heavily Armed — +1 Armor.",
+		"accent": Color(0.45, 0.70, 1.0),
+	},
+	"barbarian": {
+		"name": "Barbarian",
+		"tagline": "Uncontrolled fury.",
+		"active": "Fury — two back-to-back attacks.",
+		"passive": "Bloodlust — heal 10% of damage on CRIT.",
+		"accent": Color(0.95, 0.35, 0.30),
+	},
+}
+
+var _evolution_overlay: Control = null
+var _evolution_tooltip: VBoxContainer = null
+var _evolution_hint_label: Label = null
+var _evolution_particles: Dictionary = {}
+var _evolution_slot_nodes: Dictionary = {}
+var _evolution_hovered_key: String = ""
+var _evolution_particles_root: Node2D = null
+var _evolution_title_host: Control = null
+var _evolution_content: Control = null
+var _evolution_dim: ColorRect = null
+var _evolution_suppressed_ui: Array = []
+var _evolution_ready: bool = false
+var _evolution_pending: bool = false
+
 # --- SKILLS ---
 const SKILL_COOLDOWN_TURNS := CombatDefs.SKILL_COOLDOWN_TURNS
 const WEAPON_SKILL_SLOT := CombatDefs.WEAPON_SKILL_SLOT
@@ -578,7 +623,7 @@ func _ready() -> void:
 		_on_player_xp_changed(player.xp, player.xp_to_next)
 		_on_player_level_changed(player.level, player.stat_points)
 	if player.level >= EVOLVE_LEVEL:
-		_show_evolution_choice()
+		_request_evolution_choice()
 
 	# Inventory + UI
 	_load_permanent_items_into_inventory()
@@ -893,16 +938,22 @@ func set_turn(t: Turn) -> void:
 	if t == Turn.PLAYER:
 		_refresh_player_armor_label()
 	_update_near_death_warning()
-	_set_attack_buttons_disabled(turn != Turn.PLAYER)
+	_set_attack_buttons_disabled(turn != Turn.PLAYER or _is_evolution_choice_open())
 	if turn == Turn.PLAYER:
 		if lbl_log: lbl_log.text = "Your turn. Choose an attack."
 	else:
 		if lbl_log: lbl_log.text = "Enemy is thinking..."
+		if _is_evolution_choice_open():
+			return
 		await get_tree().create_timer(enemy_turn_delay).timeout
+		if _is_evolution_choice_open():
+			return
 		_enemy_take_turn()
 	_update_potions_ui()
 
 func _enemy_take_turn() -> void:
+	if _is_evolution_choice_open():
+		return
 	if resolving_turn: return
 	if turn != Turn.ENEMY or not enemy.is_alive() or not player.is_alive(): return
 	resolving_turn = true
@@ -1980,7 +2031,7 @@ func _on_player_level_changed(level: int, stat_points_now: int) -> void:
 		t.tween_interval(0.05)
 		t.tween_property(xp_bar, "modulate", original_modulate, 0.2)
 	if not has_evolved and level >= EVOLVE_LEVEL:
-		_show_evolution_choice()
+		_request_evolution_choice()
 	# Do not auto-open stats panel on level up.
 	# Player spends points from Inventory; we only nudge via the unspent indicator.
 	_update_unspent_points_indicator(stat_points_now)
@@ -2360,114 +2411,513 @@ func _switch_to_next_dungeon() -> void:
 
 
 # --- Evolution UI ---
+func _request_evolution_choice() -> void:
+	if has_evolved or _is_evolution_choice_open():
+		return
+	if GameState.has_class():
+		_apply_class_evolution(GameState.get_chosen_class())
+		return
+	if _dev_panel_visible:
+		_evolution_pending = true
+		return
+	_show_evolution_choice()
+
+
 func _show_evolution_choice() -> void:
 	if GameState.has_class():
 		_apply_class_evolution(GameState.get_chosen_class())
 		return
+	if _is_evolution_choice_open():
+		return
+	_evolution_pending = false
+	_dismiss_evolution_overlay()
 	if btn_attack:
 		btn_attack.disabled = true
-	var win := Window.new()
-	win.title = "Dwarf Evolution"
-	win.unresizable = true
-	win.size = Vector2i(520, 360)
+	_evolution_ready = false
+	_suppress_ui_for_evolution()
 
-	var root := VBoxContainer.new()
-	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_theme_constant_override("separation", 16)
+	var vp := get_viewport_rect().size
+	var row_sep := clampi(int(vp.x * 0.018), 10, 28)
+	var usable_w := vp.x - 80.0
+	var char_w := clampf((usable_w - float(row_sep) * 3.0) / 4.0, 130.0, 220.0)
+	var char_h := clampf(char_w * 1.35, 220.0, minf(vp.y * 0.48, 420.0))
+
+	_evolution_overlay = Control.new()
+	_evolution_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_evolution_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_evolution_overlay.z_index = 600
+
+	_evolution_dim = ColorRect.new()
+	_evolution_dim.color = Color(0.0, 0.0, 0.0, 0.0)
+	_evolution_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_evolution_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_evolution_overlay.add_child(_evolution_dim)
+
+	_evolution_title_host = Control.new()
+	_evolution_title_host.set_anchors_preset(Control.PRESET_CENTER)
+	_evolution_title_host.custom_minimum_size = Vector2(minf(vp.x * 0.8, 720.0), 72.0)
+	_evolution_title_host.offset_left = -_evolution_title_host.custom_minimum_size.x * 0.5
+	_evolution_title_host.offset_right = _evolution_title_host.custom_minimum_size.x * 0.5
+	_evolution_title_host.offset_top = -36.0
+	_evolution_title_host.offset_bottom = 36.0
+	_evolution_title_host.modulate.a = 0.0
+	_evolution_title_host.scale = Vector2(0.55, 0.55)
+	_evolution_overlay.add_child(_evolution_title_host)
 
 	var head := Label.new()
-	head.text = "Choose your class (one-time evolution):"
+	head.name = "Title"
+	head.text = "CHOOSE YOUR PATH"
 	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	head.add_theme_font_size_override("font_size", 22)
+	head.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	head.set_anchors_preset(Control.PRESET_FULL_RECT)
+	head.add_theme_font_size_override("font_size", 34)
+	head.add_theme_color_override("font_color", Color(0.92, 0.78, 0.28))
 	if DMG_FONT:
 		head.add_theme_font_override("font", DMG_FONT)
-	root.add_child(head)
+	_evolution_title_host.add_child(head)
 
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(grid)
+	_evolution_content = Control.new()
+	_evolution_content.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_evolution_content.modulate.a = 0.0
+	_evolution_content.mouse_filter = Control.MOUSE_FILTER_PASS
+	_evolution_overlay.add_child(_evolution_content)
 
-	grid.add_child(_make_class_card(
-		"warrior",
-		"Warrior (+10 STR)",
-		"Iron master of the sword. Strong bonus to strength-based weapons."
-	))
-	grid.add_child(_make_class_card(
-		"assassin",
-		"Assassin (+10 AGI)",
-		"Fast and precise. Excels with agility-scaling weapons."
-	))
-	grid.add_child(_make_class_card(
-		"guardian",
-		"Guardian (+10 VIT)",
-		"Unbreakable defense. Greatly improved survivability."
-	))
-	grid.add_child(_make_class_card(
-		"barbarian",
-		"Barbarian (+10 CRIT)",
-		"Uncontrolled fury. Massive critical hit power."
-	))
+	var hint := Label.new()
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	hint.offset_top = clampf(vp.y * 0.11, 52.0, 88.0)
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color(0.62, 0.58, 0.52))
+	if DMG_FONT:
+		hint.add_theme_font_override("font", DMG_FONT)
+	_evolution_content.add_child(hint)
+	_evolution_hint_label = hint
 
-	win.add_child(root)
+	_evolution_tooltip = _make_evolution_info_box()
+	_evolution_tooltip.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_evolution_tooltip.offset_left = clampf(vp.x * 0.12, 80.0, 200.0)
+	_evolution_tooltip.offset_right = -_evolution_tooltip.offset_left
+	_evolution_tooltip.offset_top = hint.offset_top + 26.0
+	_evolution_content.add_child(_evolution_tooltip)
+
+	var char_area := CenterContainer.new()
+	char_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	char_area.set_anchors_preset(Control.PRESET_FULL_RECT)
+	char_area.offset_top = hint.offset_top + 118.0
+	char_area.offset_bottom = -80.0
+	_evolution_content.add_child(char_area)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", row_sep)
+	char_area.add_child(row)
 
 	var layer := $CanvasLayer
 	if layer:
-		layer.add_child(win)
+		layer.add_child(_evolution_overlay)
+		_set_process_mode_recursive(_evolution_overlay, Node.PROCESS_MODE_ALWAYS)
+		_evolution_particles_root = Node2D.new()
+		_evolution_particles_root.z_index = 601
+		_evolution_particles_root.process_mode = Node.PROCESS_MODE_ALWAYS
+		layer.add_child(_evolution_particles_root)
 	else:
-		add_child(win)
-	win.popup_centered()
-	win.show()
-	win.grab_focus()
+		add_child(_evolution_overlay)
+		_set_process_mode_recursive(_evolution_overlay, Node.PROCESS_MODE_ALWAYS)
+		_evolution_particles_root = null
 
-func _make_class_card(key: String, title: String, desc: String) -> Control:
-	var card := VBoxContainer.new()
-	card.add_theme_constant_override("separation", 6)
-	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	for class_key in ["warrior", "assassin", "guardian", "barbarian"]:
+		var slot := _make_evolution_character_slot(class_key, Vector2(char_w, char_h))
+		slot.modulate.a = 0.0
+		row.add_child(slot)
+		_evolution_slot_nodes[class_key] = slot
+		var info: Dictionary = CLASS_EVOLUTION_INFO.get(class_key, {})
+		var accent: Color = info.get("accent", Color(0.9, 0.8, 0.3))
+		if _evolution_particles_root:
+			var particles := _make_evolution_hover_particles(accent)
+			_evolution_particles_root.add_child(particles)
+			_evolution_particles[class_key] = particles
 
-	var ltitle := Label.new()
-	ltitle.text = title
-	ltitle.add_theme_font_size_override("font_size", 20)
+	call_deferred("_play_evolution_intro")
+	get_tree().create_timer(4.0, true).timeout.connect(_force_evolution_intro_finish, CONNECT_ONE_SHOT)
+
+
+func _is_evolution_choice_open() -> bool:
+	return _evolution_overlay != null and is_instance_valid(_evolution_overlay)
+
+
+func _play_evolution_intro() -> void:
+	if _evolution_overlay == null or not is_instance_valid(_evolution_overlay):
+		return
+	if _evolution_title_host == null or _evolution_content == null:
+		return
+
+	await get_tree().process_frame
+	if _evolution_title_host:
+		_evolution_title_host.pivot_offset = _evolution_title_host.size * 0.5
+
+	var tw := get_tree().create_tween()
+	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	tw.set_parallel(true)
+	if _evolution_dim:
+		tw.tween_method(
+			func(a: float) -> void:
+				if _evolution_dim and is_instance_valid(_evolution_dim):
+					_evolution_dim.color = Color(0.0, 0.0, 0.0, a),
+			0.0, 0.94, 0.55
+		)
+	tw.tween_property(_evolution_title_host, "modulate:a", 1.0, 0.75)\
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(_evolution_title_host, "scale", Vector2.ONE, 0.85)\
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+	await tw.finished
+	await get_tree().create_timer(0.55, true).timeout
+	if _evolution_overlay == null or not is_instance_valid(_evolution_overlay):
+		return
+
+	var vp := get_viewport_rect().size
+	var center_y := vp.y * 0.5
+	var target_top := clampf(vp.y * 0.06, 36.0, 56.0)
+	_evolution_title_host.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_evolution_title_host.offset_left = 0.0
+	_evolution_title_host.offset_right = 0.0
+	_evolution_title_host.offset_top = center_y - 36.0
+	_evolution_title_host.offset_bottom = -(vp.y - (center_y + 36.0))
+
+	var title_tw := get_tree().create_tween()
+	title_tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	title_tw.set_parallel(true)
+	title_tw.tween_property(_evolution_title_host, "scale", Vector2(0.68, 0.68), 0.45)\
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	title_tw.tween_property(_evolution_title_host, "offset_top", target_top, 0.45)\
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	title_tw.tween_property(_evolution_title_host, "offset_bottom", -(vp.y - (target_top + 52.0)), 0.45)\
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	title_tw.tween_property(_evolution_content, "modulate:a", 1.0, 0.42)\
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	await title_tw.finished
+	if _evolution_overlay == null or not is_instance_valid(_evolution_overlay):
+		return
+
+	var idx := 0
+	for class_key in ["warrior", "assassin", "guardian", "barbarian"]:
+		var slot: Control = _evolution_slot_nodes.get(class_key)
+		if slot == null or not is_instance_valid(slot):
+			continue
+		var slot_tw := get_tree().create_tween()
+		slot_tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+		slot_tw.tween_property(slot, "modulate:a", 1.0, 0.32)\
+			.set_delay(float(idx) * 0.08)\
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		idx += 1
+
+	_evolution_ready = true
+	_layout_evolution_tooltip()
+
+
+func _force_evolution_intro_finish() -> void:
+	if _evolution_ready or not _is_evolution_choice_open():
+		return
+	if _evolution_dim and is_instance_valid(_evolution_dim):
+		_evolution_dim.color = Color(0.0, 0.0, 0.0, 0.94)
+	if _evolution_title_host and is_instance_valid(_evolution_title_host):
+		_evolution_title_host.modulate.a = 1.0
+		_evolution_title_host.scale = Vector2(0.68, 0.68)
+	if _evolution_content and is_instance_valid(_evolution_content):
+		_evolution_content.modulate.a = 1.0
+	for class_key in _evolution_slot_nodes.keys():
+		var slot: Control = _evolution_slot_nodes.get(class_key)
+		if slot and is_instance_valid(slot):
+			slot.modulate.a = 1.0
+	_evolution_ready = true
+	_layout_evolution_tooltip()
+
+
+func _suppress_ui_for_evolution() -> void:
+	_evolution_suppressed_ui.clear()
+	for n in [lbl_dungeon_name, unspent_points_label]:
+		if n and is_instance_valid(n) and n is CanvasItem:
+			_evolution_suppressed_ui.append({"node": n, "visible": (n as CanvasItem).visible})
+			(n as CanvasItem).visible = false
+	_set_attack_buttons_disabled(true)
+
+
+func _restore_ui_after_evolution() -> void:
+	for entry in _evolution_suppressed_ui:
+		var n: CanvasItem = entry.get("node")
+		if n and is_instance_valid(n):
+			n.visible = bool(entry.get("visible", true))
+	_evolution_suppressed_ui.clear()
+	if turn == Turn.PLAYER:
+		_set_attack_buttons_disabled(false)
+
+
+func _make_evolution_character_slot(class_key: String, portrait_size: Vector2) -> Control:
+	var info: Dictionary = CLASS_EVOLUTION_INFO.get(class_key, {})
+	var slot := Control.new()
+	slot.custom_minimum_size = portrait_size + Vector2(0, 24)
+	slot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	slot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	slot.mouse_filter = Control.MOUSE_FILTER_STOP
+
+	var tex := TextureRect.new()
+	tex.name = "Portrait"
+	tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tex.custom_minimum_size = portrait_size
+	tex.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	tex.offset_top = 0.0
+	tex.offset_bottom = portrait_size.y
+	tex.offset_left = -portrait_size.x * 0.5
+	tex.offset_right = portrait_size.x * 0.5
+	tex.pivot_offset = portrait_size * 0.5
+	var tex_path: String = String(CLASS_TEXTURES.get(class_key, ""))
+	if tex_path != "" and ResourceLoader.exists(tex_path):
+		tex.texture = load(tex_path) as Texture2D
+	slot.add_child(tex)
+
+	var name_lbl := Label.new()
+	name_lbl.text = String(info.get("name", class_key.capitalize()))
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_lbl.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	name_lbl.offset_top = -20.0
+	name_lbl.add_theme_font_size_override("font_size", 14)
+	name_lbl.add_theme_color_override("font_color", Color(0.72, 0.68, 0.62))
 	if DMG_FONT:
-		ltitle.add_theme_font_override("font", DMG_FONT)
-	card.add_child(ltitle)
+		name_lbl.add_theme_font_override("font", DMG_FONT)
+	slot.add_child(name_lbl)
 
-	var ldesc := Label.new()
-	ldesc.text = desc
-	ldesc.autowrap_mode = TextServer.AUTOWRAP_WORD
-	card.add_child(ldesc)
+	slot.mouse_entered.connect(Callable(self, "_on_evolution_slot_hovered").bind(class_key))
+	slot.mouse_exited.connect(Callable(self, "_on_evolution_slot_unhovered").bind(class_key))
+	slot.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			_on_class_picked(class_key)
+	)
+	return slot
 
-	var btn := Button.new()
-	btn.text = "Select"
-	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.pressed.connect(Callable(self, "_on_class_picked").bind(key))
-	card.add_child(btn)
 
-	return card
+func _make_evolution_info_box() -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.name = "EvolutionInfoBox"
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.visible = false
+	box.add_theme_constant_override("separation", 4)
+
+	var title := Label.new()
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color(0.92, 0.78, 0.28))
+	if DMG_FONT:
+		title.add_theme_font_override("font", DMG_FONT)
+	box.add_child(title)
+
+	var tag := Label.new()
+	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tag.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tag.add_theme_font_size_override("font_size", 13)
+	tag.add_theme_color_override("font_color", Color(0.72, 0.68, 0.62))
+	if DMG_FONT:
+		tag.add_theme_font_override("font", DMG_FONT)
+	box.add_child(tag)
+
+	var active := Label.new()
+	active.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	active.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	active.add_theme_font_size_override("font_size", 12)
+	active.add_theme_color_override("font_color", Color(0.88, 0.84, 0.78))
+	if DMG_FONT:
+		active.add_theme_font_override("font", DMG_FONT)
+	box.add_child(active)
+
+	var passive := Label.new()
+	passive.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	passive.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	passive.add_theme_font_size_override("font_size", 12)
+	passive.add_theme_color_override("font_color", Color(0.58, 0.74, 0.92))
+	if DMG_FONT:
+		passive.add_theme_font_override("font", DMG_FONT)
+	box.add_child(passive)
+
+	box.set_meta("lbl_title", title)
+	box.set_meta("lbl_tagline", tag)
+	box.set_meta("lbl_active", active)
+	box.set_meta("lbl_passive", passive)
+	return box
+
+
+func _layout_evolution_tooltip() -> void:
+	pass
+
+
+func _evolution_slot_center(class_key: String) -> Vector2:
+	var slot: Control = _evolution_slot_nodes.get(class_key)
+	if slot == null or not is_instance_valid(slot):
+		return Vector2.ZERO
+	var tex: TextureRect = slot.get_node_or_null("Portrait") as TextureRect
+	if tex:
+		return tex.get_global_rect().get_center()
+	return slot.get_global_rect().get_center()
+
+
+func _make_evolution_hover_particles(accent: Color) -> GPUParticles2D:
+	var p := GPUParticles2D.new()
+	p.emitting = false
+	p.one_shot = false
+	p.amount = 28
+	p.lifetime = 1.1
+	p.explosiveness = 0.0
+	p.preprocess = 0.4
+	p.z_index = 2
+
+	var mat := ParticleProcessMaterial.new()
+	mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	mat.emission_ring_radius = 88.0
+	mat.emission_ring_height = 14.0
+	mat.emission_ring_inner_radius = 0.55
+	mat.direction = Vector3(0, -1, 0)
+	mat.spread = 28.0
+	mat.initial_velocity_min = 6.0
+	mat.initial_velocity_max = 20.0
+	mat.gravity = Vector3(0, -8, 0)
+	mat.orbit_velocity_min = 0.6
+	mat.orbit_velocity_max = 1.4
+	mat.scale_min = 0.12
+	mat.scale_max = 0.38
+	mat.angular_velocity_min = -90.0
+	mat.angular_velocity_max = 90.0
+
+	var grad := Gradient.new()
+	grad.set_color(0, accent.lightened(0.25))
+	grad.add_point(0.55, Color(accent.r, accent.g, accent.b, 0.55))
+	grad.add_point(1.0, Color(accent.r, accent.g, accent.b, 0.0))
+	var grad_tex := GradientTexture1D.new()
+	grad_tex.gradient = grad
+	mat.color_ramp = grad_tex
+	p.process_material = mat
+	p.texture = _make_evolution_particle_tex()
+	return p
+
+
+func _make_evolution_particle_tex() -> Texture2D:
+	var img := Image.create(12, 12, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for x in 12:
+		for y in 12:
+			var dx := float(x) - 5.5
+			var dy := float(y) - 5.5
+			var a := clampf(1.0 - sqrt(dx * dx + dy * dy) / 5.5, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1, 1, 1, a * a))
+	return ImageTexture.create_from_image(img)
+
+
+func _on_evolution_slot_hovered(class_key: String) -> void:
+	if not _evolution_ready:
+		return
+	if _evolution_hovered_key == class_key:
+		return
+	_set_evolution_hover(_evolution_hovered_key, false)
+	_evolution_hovered_key = class_key
+	_set_evolution_hover(class_key, true)
+	_show_evolution_tooltip(class_key)
+
+
+func _on_evolution_slot_unhovered(class_key: String) -> void:
+	if _evolution_hovered_key != class_key:
+		return
+	_set_evolution_hover(class_key, false)
+	_evolution_hovered_key = ""
+	_hide_evolution_tooltip()
+
+
+func _set_evolution_hover(class_key: String, on: bool) -> void:
+	if class_key == "":
+		return
+	var slot: Control = _evolution_slot_nodes.get(class_key)
+	if slot and is_instance_valid(slot):
+		var tex: TextureRect = slot.get_node_or_null("Portrait") as TextureRect
+		if tex:
+			var tw := get_tree().create_tween()
+			tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+			tw.tween_property(tex, "scale", Vector2.ONE * (1.07 if on else 1.0), 0.16)
+			tw.parallel().tween_property(tex, "modulate", Color(1.12, 1.12, 1.12, 1.0) if on else Color.WHITE, 0.16)
+	var particles: GPUParticles2D = _evolution_particles.get(class_key)
+	if particles and is_instance_valid(particles):
+		if on:
+			particles.global_position = _evolution_slot_center(class_key)
+			particles.restart()
+			particles.emitting = true
+		else:
+			particles.emitting = false
+
+
+func _show_evolution_tooltip(class_key: String) -> void:
+	if _evolution_tooltip == null or not is_instance_valid(_evolution_tooltip):
+		return
+	var info: Dictionary = CLASS_EVOLUTION_INFO.get(class_key, {})
+	var title: Label = _evolution_tooltip.get_meta("lbl_title") as Label
+	var tag: Label = _evolution_tooltip.get_meta("lbl_tagline") as Label
+	var active: Label = _evolution_tooltip.get_meta("lbl_active") as Label
+	var passive: Label = _evolution_tooltip.get_meta("lbl_passive") as Label
+	if title:
+		title.text = String(info.get("name", class_key.capitalize()))
+	if tag:
+		tag.text = String(info.get("tagline", ""))
+	if active:
+		active.text = "Active — " + String(info.get("active", ""))
+	if passive:
+		passive.text = "Passive — " + String(info.get("passive", ""))
+	_evolution_tooltip.visible = true
+	if _evolution_hint_label and is_instance_valid(_evolution_hint_label):
+		_evolution_hint_label.visible = false
+
+
+func _hide_evolution_tooltip() -> void:
+	if _evolution_tooltip and is_instance_valid(_evolution_tooltip):
+		_evolution_tooltip.visible = false
+	if _evolution_hint_label and is_instance_valid(_evolution_hint_label):
+		_evolution_hint_label.visible = true
+
+
+func _dismiss_evolution_overlay() -> void:
+	var had_overlay := _evolution_overlay != null and is_instance_valid(_evolution_overlay)
+	_evolution_hovered_key = ""
+	_evolution_ready = false
+	_evolution_slot_nodes.clear()
+	_evolution_particles.clear()
+	_restore_ui_after_evolution()
+	_evolution_title_host = null
+	_evolution_content = null
+	_evolution_dim = null
+	if _evolution_particles_root and is_instance_valid(_evolution_particles_root):
+		_evolution_particles_root.queue_free()
+	_evolution_particles_root = null
+	_evolution_tooltip = null
+	_evolution_hint_label = null
+	_evolution_pending = false
+	if had_overlay:
+		_evolution_overlay.queue_free()
+	_evolution_overlay = null
+
 
 func _on_class_picked(class_key: String) -> void:
+	if not _evolution_ready:
+		return
 	if has_evolved:
 		return
 
 	_apply_class_evolution(class_key)
 
-	# posprzątaj okna
-	for child in $CanvasLayer.get_children():
-		if child is Window:
-			child.queue_free()
-
 	if lbl_log:
 		lbl_log.text = "Evolution complete! You are now a " + class_key.capitalize() + "."
 
-	# upewnij się, że hotbar skilli jest podłączony
 	if not skills_hotbar_wired:
 		_create_skills_ui()
 	_update_skills_ui()
 
-	# przywróć Attack jeśli można
 	if turn == Turn.PLAYER and btn_attack and (not inventory_screen or not inventory_screen.visible):
 		btn_attack.disabled = false
 
@@ -2476,45 +2926,22 @@ func _apply_class_evolution(key: String) -> void:
 	if has_evolved:
 		return
 
-	# premie do statów na ewolucji (jak było)
-	match key:
-		"warrior":
-			player.strength += 10
-		"assassin":
-			player.agility += 10
-		"guardian":
-			player.vitality += 10
-		"barbarian":
-			player.crit += 10
-		_:
-			push_warning("Unknown class key: %s" % key)
-
-	# zapamiętaj klasę
 	has_evolved = true
 	chosen_class = key
-		# Zapisz klasę permanentnie w meta
 	GameState.set_class(key)
 	GameState.save(GameState.current_slot)
 
-	# nadaj aktywne/pasywne skille dla klasy (slot [2] + pasywka)
 	_grant_class_skills(key)
-
-	# odśwież UI statystyk i panel skilli
 	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
 	_update_skills_ui()
 
-	# zamknij okno wyboru
-	for child in $CanvasLayer.get_children():
-		if child is Window:
-			child.queue_free()
+	_dismiss_evolution_overlay()
 
-	# fajerwerki i komunikat
 	if lbl_log:
 		lbl_log.text = "Evolution complete! You are now a " + key.capitalize() + "."
 	_animate_class_change(key)
 	_post_evolution_breath()
 
-	# odblokuj atak jeśli to Twoja tura i nic innego nie blokuje
 	if turn == Turn.PLAYER and btn_attack and (not inventory_screen or not inventory_screen.visible):
 		btn_attack.disabled = false
 
@@ -4336,6 +4763,8 @@ func _dev_create_panel() -> void:
 func _dev_toggle_panel() -> void:
 	_dev_panel_visible = !_dev_panel_visible
 	_dev_panel.visible = _dev_panel_visible
+	if not _dev_panel_visible and _evolution_pending and not has_evolved:
+		call_deferred("_request_evolution_choice")
 
 
 # --- helpery UI ---
