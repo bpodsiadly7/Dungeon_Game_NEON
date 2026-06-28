@@ -112,8 +112,15 @@ func play_rpg_transition(target_scene: String, flavor_lines: Array[String]) -> v
 	await get_tree().process_frame
 
 	await _reveal_arrival(0.95)
+	_deactivate_overlay()
+
+
+func _deactivate_overlay() -> void:
 	_busy = false
 	visible = false
+	if _root:
+		_root.visible = false
+		_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
 func _reveal_arrival(duration: float) -> void:

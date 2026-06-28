@@ -1123,10 +1123,29 @@ func _on_next_enemy_confirmed() -> void:
 	next_enemy_data = {}
 	set_turn(Turn.PLAYER)
 
+func _can_open_pause_menu() -> bool:
+	if resolving_turn:
+		return false
+	if _is_evolution_choice_open():
+		return false
+	return true
+
+
 func _process(_d: float) -> void:
 	if Input.is_action_just_pressed("ui_cancel"):  # ESC
+		if SettingsUI:
+			if SettingsUI.is_settings_open():
+				SettingsUI.close_settings()
+				return
+			if SettingsUI.is_pause_open():
+				SettingsUI.close_pause(true)
+				return
 		if inventory_screen and inventory_screen.visible:
 			inventory_screen._on_close()
+			return
+		if _can_open_pause_menu() and SettingsUI:
+			SettingsUI.open_pause(self)
+			return
 	
 	if Input.is_action_just_pressed("attack"):
 		_try_attack_hotkey(AttackMode.BASIC)

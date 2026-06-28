@@ -34,6 +34,8 @@ var _loadout_screen: Control = null
 func _ready() -> void:
 	if ResourceLoader.exists("res://MedievalSharp-Bold.ttf"):
 		_font = load("res://MedievalSharp-Bold.ttf")
+	if SettingsUI:
+		SettingsUI.ensure_game_unblocked()
 	_build_ui()
 	_setup_loadout_screen()
 	call_deferred("_on_home_ready_deferred")
@@ -326,6 +328,20 @@ func _on_save() -> void:
 func _on_main_menu() -> void:
 	GameState.save(GameState.current_slot)
 	get_tree().change_scene_to_file(MENU_SCENE)
+
+
+func _input(event: InputEvent) -> void:
+	if not event.is_action_pressed("ui_cancel"):
+		return
+	if SettingsUI == null:
+		return
+	if SettingsUI.is_settings_open():
+		SettingsUI.close_settings()
+		get_viewport().set_input_as_handled()
+		return
+	if not SettingsUI.is_pause_open():
+		SettingsUI.open_settings_from_menu()
+		get_viewport().set_input_as_handled()
 
 # ─────────────────────────────────────────────────────────────
 # HELPERS

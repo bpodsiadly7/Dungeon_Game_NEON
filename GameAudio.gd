@@ -8,13 +8,14 @@ const SFX_PLAYER_HIT := "res://sound/ESM_Dwarf_Vocal_One_Shot_Groan_1_Human_Game
 const SFX_PLAYER_CRIT_GRUNT := "res://sound/FightGrunt_BW.54993.wav"
 const SFX_PLAYER_CRIT_SPLATTER := "res://sound/ESM_Game_Deep_Blood_Splatter_Impact_Cinematic_Hit_Wet_Drop_Impale_Slam_Horror_Juicy_Squirt_Break.wav"
 const SFX_BOSS_ANNOUNCE := "res://sound/BS_KSPS_Synth_WarHorn_Leji_D.wav"
-const SFX_ENEMY_TRANSITION := "res://sound/ESM_Braaam_Strike_2_Hit_One_Shot_Wooden_Eclipse_Glide_Cinematic_Impact_Stinger_Movie_Trailer.wav"
+const SFX_ENEMY_TRANSITION := "res://sound/ESM_MU_Cinematic_FX_warfare_weapon_whoosh_handheld_swing_swish_fast_whip_punch_09.wav"
 const SFX_POTION_HEAL := "res://sound/ESM_Ancient_Game_Magic_Buff_Heal_2_Fantasy_Tonal_Accent_Hit_Stab.wav"
 const SFX_COLONY_LOSS := "res://sound/ESM_GB_fx_foley_one_shot_firebrst_flame_extinguish_short_01_burn_fire_flame.wav"
 const SFX_COLONY_GROWTH := "res://sound/ESM_DGF_fx_foley_footstep_stone_warrior_walk_faster_armor_war_03.wav"
 const SFX_PARRY_SUCCESS := "res://sound/ESM_SPG_fx_action_parry_impact_massive_metal_strike_crash_02.wav"
 const SFX_PARRY_FAIL := "res://sound/FL_PVT_138_Fx_Braam_System_LFO_Fmin.wav"
 const SFX_CHEST_EVENT := "res://sound/chesteventsound.wav"
+const SFX_CHEST_SLOT_LAND := "res://sound/ESM_Empire_Game_Menu_User_Interface_UI_Inventory_Placement_Ore_Metal_Item_Slot_1.wav"
 
 const COMBAT_SFX_DB := -20.0
 
@@ -27,7 +28,8 @@ var _stream_cache: Dictionary = {}
 func _ready() -> void:
 	for i in _POOL_SIZE:
 		var player := AudioStreamPlayer.new()
-		player.bus = &"Master"
+		player.bus = &"SFX"
+		player.process_mode = Node.PROCESS_MODE_ALWAYS
 		add_child(player)
 		_players.append(player)
 
@@ -82,6 +84,10 @@ func play_parry_fail() -> void:
 
 func play_chest_event() -> void:
 	_play(SFX_CHEST_EVENT, -6.0, randf_range(0.97, 1.03))
+
+
+func play_chest_slot_land() -> void:
+	_play(SFX_CHEST_SLOT_LAND, -6.0, randf_range(0.98, 1.02))
 
 
 func _play(path: String, volume_db: float, pitch_scale: float) -> void:

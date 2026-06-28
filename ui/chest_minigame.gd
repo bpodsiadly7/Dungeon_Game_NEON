@@ -366,12 +366,21 @@ func _spin_reel_flash(reel: Dictionary, reel_idx: int) -> void:
 	_pending_reels -= 1
 
 
+func _play_chest_slot_land_sfx() -> void:
+	var audio := get_node_or_null("/root/GameAudio")
+	if audio:
+		audio.play_chest_slot_land()
+
+
 func _show_symbol_flash(reel: Dictionary, sym: Dictionary, hold_sec: float, is_final: bool) -> void:
 	_clear_slot(reel)
 	var is_color: bool = str(sym.get("type", "")) != "icon"
 	var widget := _make_symbol_widget(sym, reel)
 	widget.modulate.a = 0.0
 	_place_in_reel(reel, widget)
+
+	if is_final:
+		_play_chest_slot_land_sfx()
 
 	if is_color:
 		await _animate_color_flash(widget as ShimmerColorSymbol, hold_sec, is_final)

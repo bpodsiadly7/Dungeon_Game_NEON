@@ -22,7 +22,10 @@ driver/mix_rate=48000
 [autoload]
 
 GameState="*res://GameState.gd"
+GameSettings="*res://GameSettings.gd"
+GameMusic="*res://GameMusic.gd"
 GameAudio="*res://GameAudio.gd"
+SettingsUI="*res://ui/settings_ui.gd"
 SceneTransition="*res://ui/scene_transition.gd"
 BloodCursorEffect="*res://ui/blood_cursor_effect.gd"
 CustomCursor="*res://ui/custom_cursor.gd"
@@ -31,7 +34,6 @@ CustomCursor="*res://ui/custom_cursor.gd"
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
-window/size/initial_position_type=0
 window/stretch/mode="canvas_items"
 
 [file_customization]

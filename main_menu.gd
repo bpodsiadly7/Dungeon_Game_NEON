@@ -27,6 +27,8 @@ var _starting: bool = false
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	if SettingsUI:
+		SettingsUI.ensure_game_unblocked()
 	_wire_menu_button(_play_btn, _on_play_pressed)
 	_wire_menu_button(_settings_btn, _on_settings_pressed)
 	_wire_menu_button(_quit_btn, _on_quit_pressed)
@@ -209,7 +211,8 @@ func _on_play_pressed() -> void:
 
 
 func _on_settings_pressed() -> void:
-	push_warning("MainMenu: Settings — wkrótce.")
+	if SettingsUI:
+		SettingsUI.open_settings_from_menu()
 
 
 func _on_quit_pressed() -> void:

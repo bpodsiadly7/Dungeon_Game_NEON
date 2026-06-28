@@ -15,6 +15,11 @@ func _ready() -> void:
 	_apply_cursor()
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_SIZE_CHANGED or what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		_apply_cursor()
+
+
 func _apply_cursor() -> void:
 	_scaled_tex = _build_scaled_texture()
 	if _scaled_tex == null:
