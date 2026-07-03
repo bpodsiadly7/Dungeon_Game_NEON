@@ -20,6 +20,6 @@ func finish_active_skill_turn(slot: int, cd_turns: int = -1) -> void:
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false

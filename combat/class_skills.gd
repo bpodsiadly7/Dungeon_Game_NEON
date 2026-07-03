@@ -14,13 +14,14 @@ func basic_strike(slot: int) -> void:
 	_g._last_kill_context = {"roll": -1, "weapon_before": _g.weapon.duplicate(true)}
 	_g.enemy.take_damage(dmg)
 	_g.show_damage_popup(_g.enemy, str(dmg), "hit")
+	_g.notify_player_hit_enemy(false, false)
 	if _g.lbl_log:
 		_g.lbl_log.text = "Basic Strike for %d dmg." % dmg
 	_g.skill_cooldowns[slot] = CombatDefs.SKILL_COOLDOWN_TURNS
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false
 
@@ -37,6 +38,7 @@ func power_strike(slot: int) -> void:
 	_g._last_kill_context = {"roll": _g.CRIT, "weapon_before": _g.weapon.duplicate(true)}
 	_g.enemy.take_damage(dmg)
 	_g.show_damage_popup(_g.enemy, str(dmg), "crit")
+	_g.notify_player_hit_enemy(true, false)
 	if _g.lbl_log:
 		_g.lbl_log.text = "Power Strike! Guaranteed CRIT for %d dmg (HP cost %d)." % [dmg, cost]
 	if _g.bloodlust_lifesteal > 0.0 and _g.player.is_alive():
@@ -48,7 +50,7 @@ func power_strike(slot: int) -> void:
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false
 
@@ -62,17 +64,19 @@ func quick_slash(slot: int) -> void:
 	_g._last_kill_context = {"roll": -1, "weapon_before": _g.weapon.duplicate(true)}
 	_g.enemy.take_damage(h1)
 	_g.show_damage_popup(_g.enemy, str(h1), "hit")
+	_g.notify_player_hit_enemy(false, false)
 	await _g.get_tree().create_timer(0.05).timeout
 	if _g.enemy.is_alive():
 		_g.enemy.take_damage(h2)
 		_g.show_damage_popup(_g.enemy, str(h2), "hit")
+		_g.notify_player_hit_enemy(false, false)
 	if _g.lbl_log:
 		_g.lbl_log.text = "Quick Slash! %d + %d = %d dmg." % [h1, h2, total]
 	_g.skill_cooldowns[slot] = CombatDefs.SKILL_COOLDOWN_TURNS
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false
 
@@ -87,7 +91,7 @@ func shield_block(slot: int) -> void:
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false
 
@@ -110,6 +114,6 @@ func fury(slot: int) -> void:
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false

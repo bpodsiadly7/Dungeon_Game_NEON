@@ -101,6 +101,7 @@ var resolving_turn: bool = false
 var _chest_reward_handled: bool = false
 var _game_pause_depth: int = 0
 var _inventory_pause_active: bool = false
+var _last_shake_sfx_ms: int = 0
 
 var _dice: DicePlayback
 var _player_attacks: PlayerAttacks
@@ -108,6 +109,7 @@ var _weapon_skills: WeaponSkills
 var _class_skills: ClassSkills
 var _skill_runtime: SkillRuntime
 var _weapon_equipment: WeaponEquipment
+var _status_effects: StatusEffects
 
 var _heal_particles: GPUParticles2D
 
@@ -691,7 +693,7 @@ func _ready() -> void:
 	else:
 		add_child(lbl_dungeon_name)
 
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
 	# tylko w wersji testowej gry:
 	#_dev_fill_inventory()
 	set_process_unhandled_input(true)
@@ -746,6 +748,13 @@ func _init_combat_modules() -> void:
 	_class_skills = ClassSkills.new(self)
 	_skill_runtime = SkillRuntime.new(self)
 	_weapon_equipment = WeaponEquipment.new(self)
+	_status_effects = StatusEffects.new(self)
+	_status_effects.setup_world_markers(player, enemy)
+
+
+func notify_player_hit_enemy(crit: bool = false, glancing: bool = false) -> void:
+	if _status_effects:
+		_status_effects.on_player_hit_enemy(crit, glancing)
 
 
 func _sync_inventory_screen_if_open() -> void:
@@ -805,12 +814,18 @@ func _inventory_ui_equipped() -> Dictionary:
 func open_inventory() -> void:
 	if _shrine_open:
 		return
+	if resolving_turn:
+		return
 	if inventory_screen:
 		inventory_screen.open(inventory, _inventory_ui_equipped(), _inventory_ui_stats())
 		_set_inventory_paused(true)
+		if _status_effects:
+			_status_effects.set_markers_layer_visible(false)
 
 func _on_inventory_closed() -> void:
 	_set_inventory_paused(false)
+	if _status_effects:
+		_status_effects.set_markers_layer_visible(true)
 	_update_near_death_warning()
 	print("[INVENTORY] Closed")
 
@@ -936,20 +951,45 @@ func _apply_global_font() -> void:
 
 func set_turn(t: Turn) -> void:
 	turn = t
+	_set_attack_buttons_disabled(true)
+
 	if t == Turn.PLAYER:
 		_refresh_player_armor_label()
-	_update_near_death_warning()
-	_set_attack_buttons_disabled(turn != Turn.PLAYER or _is_evolution_choice_open())
-	if turn == Turn.PLAYER:
-		if lbl_log: lbl_log.text = "Your turn. Choose an attack."
+		if _status_effects:
+			await _status_effects.tick_turn_start_async("player")
+		if not player.is_alive():
+			resolving_turn = false
+			_update_potions_ui()
+			return
+		_update_near_death_warning()
+		_set_attack_buttons_disabled(_is_evolution_choice_open())
+		resolving_turn = false
+		_update_potions_ui()
+		if lbl_log:
+			lbl_log.text = "Your turn. Choose an attack."
 	else:
-		if lbl_log: lbl_log.text = "Enemy is thinking..."
+		if _status_effects:
+			await _status_effects.tick_turn_start_async("enemy")
+		resolving_turn = false
+		if lbl_log:
+			lbl_log.text = "Enemy is thinking..."
 		if _is_evolution_choice_open():
+			_update_potions_ui()
+			return
+		if not enemy.is_alive():
+			_update_potions_ui()
 			return
 		await get_tree().create_timer(enemy_turn_delay).timeout
 		if _is_evolution_choice_open():
+			_update_potions_ui()
 			return
-		_enemy_take_turn()
+		if not enemy.is_alive():
+			_update_potions_ui()
+			return
+		await _enemy_take_turn()
+		_update_potions_ui()
+		return
+
 	_update_potions_ui()
 
 func _enemy_take_turn() -> void:
@@ -962,12 +1002,18 @@ func _enemy_take_turn() -> void:
 	if lbl_log: lbl_log.text = desc
 	await get_tree().create_timer(0.1).timeout
 	if player.is_alive():
-		set_turn(Turn.PLAYER)
+		await set_turn(Turn.PLAYER)
 	resolving_turn = false
 
 func shake_camera(intensity: float = 6.0, duration: float = 0.15) -> void:
 	if cam == null:
 		return
+	if intensity >= 7.0:
+		var now_ms := Time.get_ticks_msec()
+		if now_ms - _last_shake_sfx_ms >= 400:
+			_last_shake_sfx_ms = now_ms
+			if GameAudio:
+				GameAudio.play_screen_shake()
 	var original := cam.offset
 	var t := get_tree().create_tween()
 	var steps := 6
@@ -1066,6 +1112,8 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 
 	player_temp_armor_delta = 0
 	enemy_armor_penalty = 0
+	if _status_effects:
+		_status_effects.clear_target("enemy")
 	current_enemy_data = data.duplicate(true)
 	# Ensure armor exists (new armor system). Fallback from difficulty.
 	if not current_enemy_data.has("armor"):
@@ -1121,7 +1169,7 @@ func _on_next_enemy_confirmed() -> void:
 			next_enemy_data = {"name":"Fallback Goblin","hp":20,"damage":5,"difficulty":1}
 	_request_spawn(next_enemy_data)
 	next_enemy_data = {}
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
 
 func _can_open_pause_menu() -> bool:
 	if resolving_turn:
@@ -1134,11 +1182,9 @@ func _can_open_pause_menu() -> bool:
 func _process(_d: float) -> void:
 	if Input.is_action_just_pressed("ui_cancel"):  # ESC
 		if SettingsUI:
-			if SettingsUI.is_settings_open():
-				SettingsUI.close_settings()
+			if SettingsUI.should_block_pause_open():
 				return
-			if SettingsUI.is_pause_open():
-				SettingsUI.close_pause(true)
+			if SettingsUI.is_pause_open() or SettingsUI.is_settings_open():
 				return
 		if inventory_screen and inventory_screen.visible:
 			inventory_screen._on_close()
@@ -1433,6 +1479,8 @@ func _apply_treasure_chest_reward(reward: Dictionary) -> void:
 		if potions < POTION_MAX:
 			potions = POTION_MAX
 			_update_potions_ui()
+			if GameAudio:
+				GameAudio.play_potion_pickup()
 		show_damage_popup(player, "FULL HEAL", "heal")
 		if lbl_log:
 			lbl_log.text = "Treasure: fully healed and potions refilled!"
@@ -1474,6 +1522,8 @@ func _apply_player_damage(dmg:int, kind:String = "hit") -> void:
 
 	player.take_damage(final_dmg)
 	show_damage_popup(player, str(final_dmg), kind)
+	if _status_effects:
+		_status_effects.on_enemy_hit_player()
 
 
 
@@ -1516,11 +1566,19 @@ func _transition_to_next_enemy() -> void:
 
 
 func _flat_weapon_dmg_from_armor_pieces() -> int:
-	var total := 0
-	for it in [equipped_helmet, equipped_armor, equipped_gloves, equipped_boots]:
-		if typeof(it) != TYPE_DICTIONARY or (it as Dictionary).is_empty():
+	var eq := {
+		"armor": equipped_armor,
+		"helmet": equipped_helmet,
+		"gloves": equipped_gloves,
+		"boots": equipped_boots,
+	}
+	var counts := ArmorSetRules.type_counts(eq)
+	var total := ArmorSetRules.berserker_set_dmg_bonus(counts)
+	for slot_key in ArmorSetRules.SET_SLOTS:
+		var it: Dictionary = eq.get(slot_key, {})
+		if it.is_empty():
 			continue
-		var b: Dictionary = (it as Dictionary).get("bonuses", {})
+		var b: Dictionary = it.get("bonuses", {})
 		total += int(b.get("weapon_dmg", 0))
 	return total
 
@@ -1569,25 +1627,13 @@ func _calc_player_armor_total() -> int:
 	var base := 0
 	if not equipped_armor.is_empty():
 		base = int(equipped_armor.get("armor", 0))
-	var types := []
-	for it in [equipped_armor, equipped_helmet, equipped_gloves, equipped_boots]:
-		if typeof(it) == TYPE_DICTIONARY and not (it as Dictionary).is_empty():
-			var t := String((it as Dictionary).get("armor_type", ""))
-			# Berserker nie daje bonusu setowego do armor — tylko flat dmg z bonuses.
-			if t != "" and t != "berserker":
-				types.append(t)
-	# set bonus: 2 same -> +1, 3 same -> +2
-	var bonus := 0
-	if types.size() >= 2:
-		var counts := {}
-		for t in types:
-			counts[t] = int(counts.get(t, 0)) + 1
-		for t in counts.keys():
-			var c := int(counts[t])
-			if c == 2:
-				bonus = max(bonus, 1)
-			elif c >= 3:
-				bonus = max(bonus, 2)
+	var counts := ArmorSetRules.type_counts({
+		"armor": equipped_armor,
+		"helmet": equipped_helmet,
+		"gloves": equipped_gloves,
+		"boots": equipped_boots,
+	})
+	var bonus := ArmorSetRules.armor_set_bonus(counts)
 	return clamp(base + bonus + passive_armor_bonus + player_temp_armor_delta, 0, 15)
 
 func _on_enemy_hp_changed(cur:int, maxv:int) -> void:
@@ -1620,7 +1666,7 @@ func _on_enemy_defeated() -> void:
 		else:
 			_chest_reward_handled = false
 		await _transition_to_next_enemy()
-		set_turn(Turn.PLAYER)
+		await set_turn(Turn.PLAYER)
 		return
 	var gained_xp := 15
 	var killed_name := "???"
@@ -1652,7 +1698,7 @@ func _on_enemy_defeated() -> void:
 
 
 	await _transition_to_next_enemy()
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
 
 func _try_upgrade_weapon_on_boss_kill(enemy_data: Dictionary) -> void:
 	# Upgrade rule: weapon used to kill boss upgrades by +1 tier (in-place)
@@ -2021,6 +2067,8 @@ func _make_styled_button(label_text: String, col: Color) -> Button:
 func _update_labels() -> void:
 	_on_player_hp_changed(player.hp, player.max_hp)
 	_on_enemy_hp_changed(enemy.hp, enemy.max_hp)
+	if _status_effects:
+		_status_effects.sync_marker_positions(player, enemy)
 
 func show_damage_popup(target: Node2D, text: String, kind: String = "hit") -> void:
 	_FLOATING_DAMAGE_NUMBERS.spawn(fx_root, cam, target, text, kind, DMG_FONT)
@@ -2181,7 +2229,7 @@ func _switch_to_dungeon(idx:int) -> void:
 		lbl_dungeon_name.text = "Current dungeon: %s" % String(DUNGEONS[current_dungeon_index]["name"])
 
 	_request_spawn(_pick_enemy())
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
 
 
 
@@ -2309,7 +2357,7 @@ func _update_potions_ui() -> void:
 					tb.texture_normal = TEX_HP_BOTTLE_2
 				_:
 					tb.texture_normal = TEX_HP_BOTTLE_3
-	var can_use: bool = (turn == Turn.PLAYER) and (potions > 0) and (player.hp < player.max_hp)
+	var can_use: bool = (turn == Turn.PLAYER) and not resolving_turn and (potions > 0) and (player.hp < player.max_hp)
 	if btn_use_potion:
 		btn_use_potion.disabled = not can_use
 
@@ -2351,7 +2399,7 @@ func _use_potion() -> void:
 	await get_tree().create_timer(0.25).timeout
 
 	if was_player_turn and player.is_alive() and enemy.is_alive():
-		set_turn(Turn.ENEMY)
+		await set_turn(Turn.ENEMY)
 	else:
 		if turn == Turn.PLAYER and btn_attack:
 			btn_attack.disabled = false
@@ -2364,6 +2412,8 @@ func _try_drop_potion() -> void:
 	if randf() <= POTION_DROP_CHANCE:
 		potions += 1
 		_update_potions_ui()
+		if GameAudio:
+			GameAudio.play_potion_pickup()
 		if lbl_log:
 			lbl_log.text = "You found a Health Potion! (%d/%d)" % [potions, POTION_MAX]
 		show_damage_popup(player, "+Potion", "heal")
@@ -2440,7 +2490,7 @@ func _on_dungeon_choice_confirmed() -> void:
 
 func _on_dungeon_choice_canceled() -> void:
 	await _transition_to_next_enemy()
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
 
 func _switch_to_next_dungeon() -> void:
 	if current_dungeon_index == 0:
@@ -2462,13 +2512,13 @@ func _switch_to_next_dungeon() -> void:
 
 		_apply_world_background_for_current_dungeon()
 		_request_spawn(_pick_enemy())
-		set_turn(Turn.PLAYER)
+		await set_turn(Turn.PLAYER)
 	else:
 		# dalej nie używamy tego przejścia — od D2 decyduje _offer_branch_choice_after_boss()
 		if lbl_log:
 			lbl_log.text = "No further dungeons via linear path. Stay here."
 		_request_spawn(_pick_enemy())
-		set_turn(Turn.PLAYER)
+		await set_turn(Turn.PLAYER)
 
 
 # --- Evolution UI ---
@@ -3141,13 +3191,13 @@ func _load_permanent_items_into_inventory() -> void:
 			"scale": {"str": 0.7, "agi": 0.2}
 		}
 		inventory["weapon"].append(rusty)
-		_equip_item("weapon", 0)
+		_equip_item("weapon", 0, false)
 		print("[INVENTORY] First run — equipped Rusty Sword")
 	else:
 		print("[INVENTORY] Loaded %d item(s) from GameState." % loaded)
 		for slot in GameState.EQUIPMENT_SLOT_KEYS:
 			if not inventory[slot].is_empty():
-				_equip_item(slot, 0)
+				_equip_item(slot, 0, false)
 
 
 func _inventory_item_line(it: Dictionary) -> String:
@@ -3220,15 +3270,16 @@ func _consume_weapon_equip_turn() -> void:
 		return
 	if lbl_log:
 		lbl_log.text = "You swap weapons — your turn ends."
-	set_turn(Turn.ENEMY)
+	await set_turn(Turn.ENEMY)
 	_tick_skill_cooldowns()
 
 
-func _equip_item(key:String, idx:int) -> void:
+func _equip_item(key:String, idx:int, play_sfx: bool = true) -> void:
 	var items: Array = inventory.get(key, [])
 	if idx < 0 or idx >= items.size():
 		return
 	var it: Dictionary = items[idx]
+	ArmorSetRules.ensure_armor_type(it)
 	var weapon_changed_in_combat := false
 
 	match key:
@@ -3266,6 +3317,9 @@ func _equip_item(key:String, idx:int) -> void:
 
 	_update_labels()
 	_sync_inventory_screen_if_open()
+
+	if play_sfx and GameAudio:
+		GameAudio.play_item_equip()
 
 	if weapon_changed_in_combat:
 		_consume_weapon_equip_turn()
@@ -3380,33 +3434,37 @@ func _rarity_name(r:int) -> String:
 
 func _add_item_to_inventory(it:Dictionary) -> Dictionary:
 	var t := str(it.get("type",""))
+	var ref: Dictionary = {}
 	match t:
 		"weapon":
 			inventory["weapon"].append(it)
-			return {"key":"weapon","index":inventory["weapon"].size()-1}
+			ref = {"key":"weapon","index":inventory["weapon"].size()-1}
 		"armor":
 			inventory["armor"].append(it)
-			return {"key":"armor","index":inventory["armor"].size()-1}
+			ref = {"key":"armor","index":inventory["armor"].size()-1}
 		"helmet":
 			inventory["helmet"].append(it)
-			return {"key":"helmet","index":inventory["helmet"].size()-1}
+			ref = {"key":"helmet","index":inventory["helmet"].size()-1}
 		"necklace":
 			inventory["necklace"].append(it)
-			return {"key":"necklace","index":inventory["necklace"].size()-1}
+			ref = {"key":"necklace","index":inventory["necklace"].size()-1}
 		"gloves":
 			inventory["gloves"].append(it)
-			return {"key":"gloves","index":inventory["gloves"].size()-1}
+			ref = {"key":"gloves","index":inventory["gloves"].size()-1}
 		"boots":
 			inventory["boots"].append(it)
-			return {"key":"boots","index":inventory["boots"].size()-1}
+			ref = {"key":"boots","index":inventory["boots"].size()-1}
 		"ring1":
 			inventory["ring1"].append(it)
-			return {"key":"ring1","index":inventory["ring1"].size()-1}
+			ref = {"key":"ring1","index":inventory["ring1"].size()-1}
 		"ring2":
 			inventory["ring2"].append(it)
-			return {"key":"ring2","index":inventory["ring2"].size()-1}
+			ref = {"key":"ring2","index":inventory["ring2"].size()-1}
 		_:
-			return {}
+			ref = {}
+	if not ref.is_empty() and GameAudio:
+		GameAudio.play_item_pickup()
+	return ref
 
 func _show_loot_toast(item: Dictionary) -> void:
 	if not $CanvasLayer:
@@ -4509,6 +4567,8 @@ func _open_shrine_dialog() -> void:
 	_shrine_locked = false
 	inventory_screen.open_shrine(inventory, _inventory_ui_equipped(), _inventory_ui_stats())
 	_set_inventory_paused(true)
+	if _status_effects:
+		_status_effects.set_markers_layer_visible(false)
 
 
 func _on_shrine_item_confirmed(slot_key: String, idx: int) -> void:
@@ -4519,6 +4579,8 @@ func _on_shrine_closed() -> void:
 	_set_inventory_paused(false)
 	_shrine_open = false
 	_shrine_in_progress = false
+	if _status_effects:
+		_status_effects.set_markers_layer_visible(true)
 	if shrine_cooldown <= 0:
 		shrine_cooldown = 6
 	_continue_run_after_event()
@@ -4938,7 +5000,7 @@ func _dev_run_enemy_crit_attack() -> void:
 		lbl_log.text = desc
 	await get_tree().create_timer(0.1).timeout
 	if player.is_alive():
-		set_turn(Turn.PLAYER)
+		await set_turn(Turn.PLAYER)
 	resolving_turn = false
 	_show_toast("Enemy CRIT test", 1.0)
 

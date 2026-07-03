@@ -118,6 +118,18 @@ static func _style_for(text: String, kind: String) -> _PopupStyle:
 		s.drift = 8.0
 		return s
 
+	if kind == "bleed":
+		s.font_size = 34
+		s.main_color = Color(0.92, 0.18, 0.14)
+		s.outline_color = Color(0.35, 0.02, 0.02)
+		s.outline_size = 8
+		s.glow_color = Color(0.75, 0.05, 0.05, 0.45)
+		s.pop_peak = 1.22
+		s.rise = 52.0
+		s.duration = 0.72
+		s.drift = 7.0
+		return s
+
 	if kind == "crit":
 		s.font_size = 58
 		s.main_color = Color(1.0, 0.92, 0.35)

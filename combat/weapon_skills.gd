@@ -71,11 +71,13 @@ func skull_cleave(slot: int) -> void:
 		var dmg: int = maxi(1, int(round(float(base_dmg) * 1.45)))
 		_g.enemy.take_damage(dmg)
 		_g.show_damage_popup(_g.enemy, str(dmg), "hit")
+		_g.notify_player_hit_enemy(false, false)
 		log += "Hit for %d dmg (145%%).\n" % dmg
 	else:
 		var dmg: int = maxi(1, int(round(float(base_dmg) * 0.45)))
 		_g.enemy.take_damage(dmg)
 		_g.show_damage_popup(_g.enemy, str(dmg), "hit")
+		_g.notify_player_hit_enemy(false, true)
 		log += "Glancing blow for %d dmg (45%%).\n" % dmg
 	if _g.lbl_log:
 		_g.lbl_log.text = log
@@ -140,11 +142,13 @@ func earthshaker(slot: int) -> void:
 			dmg = maxi(1, int(round(float(dmg) * _g.calc_crit_multiplier())))
 		_g.enemy.take_damage(dmg)
 		_g.show_damage_popup(_g.enemy, str(dmg), kind)
+		_g.notify_player_hit_enemy(crit, false)
 		log += "Hit for %d dmg.\n" % dmg
 	else:
 		var dmg: int = maxi(1, int(round(float(base_dmg) * 0.55)))
 		_g.enemy.take_damage(dmg)
 		_g.show_damage_popup(_g.enemy, str(dmg), "hit")
+		_g.notify_player_hit_enemy(false, true)
 		log += "Shockwave for %d dmg (55%%).\n" % dmg
 	if _g.lbl_log:
 		_g.lbl_log.text = log
@@ -206,6 +210,7 @@ func overdraw(slot: int) -> void:
 		var bonus_dmg: int = maxi(1, int(round(float(_g.calc_player_weapon_damage()) * 0.08 * float(d10_roll))))
 		_g.enemy.take_damage(bonus_dmg)
 		_g.show_damage_popup(_g.enemy, str(bonus_dmg), "hit")
+		_g.notify_player_hit_enemy(d20_roll == _g.CRIT, false)
 		log += "Overdraw burst +%d dmg.\n" % bonus_dmg
 	if _g.lbl_log:
 		_g.lbl_log.text = log

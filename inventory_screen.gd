@@ -102,10 +102,12 @@ var _sort_mode: SortMode = SortMode.NONE
 var _slot_panels:  Dictionary = {}
 var _item_grid:    GridContainer = null
 var _item_name:    Label = null
+var _details_panel: PanelContainer
 var _item_stats:   RichTextLabel = null
 var _equip_btn:    Button = null
 var _drop_btn:     Button = null
 var _stats_labels: Dictionary = {}
+var _gear_summary_label: Label = null
 var _backpack_scroll: ScrollContainer = null
 var _char_sprite: TextureRect = null
 var _stats_plus_buttons: Dictionary = {}
@@ -139,14 +141,42 @@ var _shrine_pending_idx: int = -1
 ## Zwraca Texture2D gracza z aktywnego runa (tak samo jak widoczna postać). Jeśli Callable pusty / null — fallback z GameState.
 var _run_player_texture_supplier: Callable = Callable()
 
+const PANEL_SIZE := Vector2i(1200, 720)
+## Szerokości kolumn muszą się mieścić w ~1090 px treści (shell + marginesy).
+## Środek >= 400 px — sloty ekwipunku sięgają ±196 px od centrum.
+const COL_LEFT := 218
+const COL_CENTER_MIN := 400
+const COL_RIGHT := 456
+const BACKPACK_COLS := 6
+const BACKPACK_TILE := Vector2(62, 62)
+## Stały podział wysokości prawej kolumny: plecak ~62%, szczegóły ~38%.
+const RIGHT_BACKPACK_STRETCH := 10.0
+const RIGHT_DETAILS_STRETCH := 7.0
+const RIGHT_DETAILS_MIN_H := 210
+const STAT_VALUE_COLOR := Color(0.92, 0.90, 0.88)
+const OVERLAY_COLOR_INVENTORY := Color(0.012, 0.010, 0.008, 0.90)
+const OVERLAY_COLOR_SHRINE := Color(0.015, 0.012, 0.010, 0.78)
+const UI_ACCENT_GOLD := Color(0.72, 0.62, 0.44)
+const SLOT_BORDER_COLOR := Color(0.32, 0.27, 0.21)
+const SLOT_BORDER_EMPTY := Color(0.22, 0.19, 0.15)
+const SLOT_BORDER_SELECTED := Color(0.48, 0.42, 0.34)
+
 func _ready() -> void:
 	if ResourceLoader.exists("res://MedievalSharp-Bold.ttf"):
 		_font = load("res://MedievalSharp-Bold.ttf")
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	_purge_legacy_scene_nodes()
 	_build_ui()
 	_clear_selection()
 	visible = false
+
+
+func _purge_legacy_scene_nodes() -> void:
+	for node_name in ["MainPanel", "TempBG", "BG"]:
+		var legacy := get_node_or_null(node_name)
+		if legacy:
+			legacy.free()
 
 func _process(_delta: float) -> void:
 	if not visible:
@@ -156,54 +186,83 @@ func _process(_delta: float) -> void:
 		_shift_compare_active = shift_now
 		if not _hovered_item.is_empty():
 			_show_item_details(_hovered_item, _hovered_slot, true, _hovered_idx)
+		elif selected_idx >= 0 and not selected_item.is_empty():
+			_show_item_details(selected_item, selected_slot, false, selected_idx)
 	if _dragging and _drag_preview:
 		_drag_preview.size = Vector2(90, 30)
 		_drag_preview.global_position = get_global_mouse_position() + Vector2(12, 12)
 
 func _build_ui() -> void:
 	_overlay = ColorRect.new()
-	_overlay.color = Color(0, 0, 0, 0.72)
+	_overlay.color = OVERLAY_COLOR_INVENTORY
 	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_overlay)
 
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(1200, 660)
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.offset_left   = -600
-	panel.offset_right  =  600
-	panel.offset_top    = -330
-	panel.offset_bottom =  330
-	_style_main_panel(panel)
-	add_child(panel)
+	var shell := Control.new()
+	shell.custom_minimum_size = Vector2(PANEL_SIZE)
+	shell.set_anchors_preset(Control.PRESET_CENTER)
+	shell.offset_left = -PANEL_SIZE.x * 0.5
+	shell.offset_right = PANEL_SIZE.x * 0.5
+	shell.offset_top = -PANEL_SIZE.y * 0.5
+	shell.offset_bottom = PANEL_SIZE.y * 0.5
+	shell.clip_contents = true
+	add_child(shell)
+
+	var outer := PanelContainer.new()
+	outer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	outer.clip_contents = true
+	outer.add_theme_stylebox_override("panel", FantasyUiAssets.shell_border())
+	shell.add_child(outer)
+
+	var inset := MarginContainer.new()
+	inset.set_anchors_preset(Control.PRESET_FULL_RECT)
+	inset.add_theme_constant_override("margin_left", 12)
+	inset.add_theme_constant_override("margin_right", 12)
+	inset.add_theme_constant_override("margin_top", 12)
+	inset.add_theme_constant_override("margin_bottom", 12)
+	outer.add_child(inset)
+
+	var inner := PanelContainer.new()
+	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inner.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inner.clip_contents = true
+	inner.add_theme_stylebox_override("panel", FantasyUiAssets.shell_fill())
+	inset.add_child(inner)
 
 	var root_vbox := VBoxContainer.new()
-	root_vbox.add_theme_constant_override("separation", 10)
-	panel.add_child(root_vbox)
+	root_vbox.add_theme_constant_override("separation", 6)
+	inner.add_child(root_vbox)
 
-	# Header
-	var header := HBoxContainer.new()
+	var header := PanelContainer.new()
+	header.add_theme_stylebox_override("panel", FantasyUiAssets.title_panel_loose())
 	root_vbox.add_child(header)
-	var title := _make_label("INVENTORY", 28, Color(0.95, 0.82, 0.30))
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var header_row := HBoxContainer.new()
+	header_row.add_theme_constant_override("separation", 10)
+	header.add_child(header_row)
+
+	var title := _make_label("INVENTORY", 24, UI_ACCENT_GOLD)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	header.add_child(title)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header_row.add_child(title)
 	_screen_title = title
+
 	var close_btn := Button.new()
 	close_btn.text = "X"
-	close_btn.custom_minimum_size = Vector2(44, 44)
+	close_btn.custom_minimum_size = Vector2(32, 32)
 	close_btn.focus_mode = Control.FOCUS_NONE
 	close_btn.pressed.connect(_on_close)
 	_style_close_btn(close_btn)
-	header.add_child(close_btn)
+	header_row.add_child(close_btn)
 
-	var sep := HSeparator.new()
-	sep.add_theme_color_override("color", Color(0.35, 0.30, 0.22, 0.8))
-	root_vbox.add_child(sep)
+	root_vbox.add_child(_make_gold_rule())
 
 	var content := HBoxContainer.new()
-	content.add_theme_constant_override("separation", 16)
+	content.add_theme_constant_override("separation", 12)
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.clip_contents = true
 	root_vbox.add_child(content)
 
 	_build_left_panel(content)
@@ -211,13 +270,34 @@ func _build_ui() -> void:
 	_build_right_panel(content)
 
 func _build_left_panel(parent: HBoxContainer) -> void:
+	var col := Control.new()
+	col.custom_minimum_size = Vector2(COL_LEFT, 0)
+	col.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	col.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col.clip_contents = true
+	parent.add_child(col)
+
+	var section := PanelContainer.new()
+	section.set_anchors_preset(Control.PRESET_FULL_RECT)
+	section.clip_contents = true
+	section.add_theme_stylebox_override("panel", FantasyUiAssets.section_box_loose())
+	col.add_child(section)
+
+	var pad := MarginContainer.new()
+	pad.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	pad.add_theme_constant_override("margin_left", 6)
+	pad.add_theme_constant_override("margin_right", 6)
+	pad.add_theme_constant_override("margin_top", 4)
+	pad.add_theme_constant_override("margin_bottom", 6)
+	section.add_child(pad)
+
 	var vbox := VBoxContainer.new()
-	vbox.custom_minimum_size = Vector2(200, 0)
-	vbox.add_theme_constant_override("separation", 8)
-	parent.add_child(vbox)
+	vbox.add_theme_constant_override("separation", 6)
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	pad.add_child(vbox)
 	_left_panel = vbox
 
-	var title := _make_label("STATISTICS", 16, Color(0.95, 0.82, 0.30))
+	var title := _make_label("STATISTICS", 15, UI_ACCENT_GOLD)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
 	vbox.add_child(_make_hsep())
@@ -236,7 +316,7 @@ func _build_left_panel(parent: HBoxContainer) -> void:
 		var lbl_name := _make_label(str(def[1]) + ":", 15, Color(0.72, 0.70, 0.66))
 		lbl_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(lbl_name)
-		var lbl_val := _make_label("0", 15, def[2] as Color)
+		var lbl_val := _make_label("0", 15, STAT_VALUE_COLOR)
 		lbl_val.custom_minimum_size = Vector2(40, 0)
 		lbl_val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		row.add_child(lbl_val)
@@ -249,6 +329,8 @@ func _build_left_panel(parent: HBoxContainer) -> void:
 		var captured_key := str(def[0])
 		plus_btn.pressed.connect(func():
 			if int(player_stats.get("stat_points", 0)) > 0:
+				if GameAudio:
+					GameAudio.play_menu_click()
 				stat_spent.emit(captured_key)
 		)
 		_style_small_btn(plus_btn, def[2] as Color)
@@ -264,7 +346,7 @@ func _build_left_panel(parent: HBoxContainer) -> void:
 	var sp_lbl := _make_label("Stat Points:", 15, Color(0.72, 0.70, 0.66))
 	sp_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sp_row.add_child(sp_lbl)
-	var sp_val := _make_label("0", 15, Color(1.0, 0.92, 0.30))
+	var sp_val := _make_label("0", 15, UI_ACCENT_GOLD)
 	sp_row.add_child(sp_val)
 	_stats_labels["stat_points"] = sp_val
 
@@ -297,13 +379,30 @@ func _build_left_panel(parent: HBoxContainer) -> void:
 	dmg_row.add_child(dmg_val)
 	_stats_labels["total_dmg"] = dmg_val
 
+	vbox.add_child(_make_hsep())
+	_gear_summary_label = _make_label("Armor set: none", 12, Color(0.58, 0.54, 0.46))
+	_gear_summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_gear_summary_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_gear_summary_label)
+
 func _build_center_panel(parent: HBoxContainer) -> void:
 	var area := Control.new()
-	area.custom_minimum_size = Vector2(400, 0)
-	area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	area.custom_minimum_size = Vector2(COL_CENTER_MIN, 0)
+	area.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	area.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	area.clip_contents = true
 	parent.add_child(area)
 	_center_area = area
+
+	var center_bg := PanelContainer.new()
+	center_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center_bg.offset_left = 4
+	center_bg.offset_right = -4
+	center_bg.offset_top = 4
+	center_bg.offset_bottom = -4
+	center_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center_bg.add_theme_stylebox_override("panel", FantasyUiAssets.center_panel())
+	area.add_child(center_bg)
 
 	_shrine_bg = TextureRect.new()
 	if ResourceLoader.exists(SHRINE_TEX_PATH):
@@ -323,7 +422,7 @@ func _build_center_panel(parent: HBoxContainer) -> void:
 	_shrine_drop_slot.offset_top = -SHRINE_DROP_SLOT_SIZE.y * 0.5
 	_shrine_drop_slot.offset_bottom = SHRINE_DROP_SLOT_SIZE.y * 0.5
 	_shrine_drop_slot.visible = false
-	_set_panel_border(_shrine_drop_slot, Color(1.0, 0.85, 0.35))
+	_set_panel_border(_shrine_drop_slot, UI_ACCENT_GOLD)
 	area.add_child(_shrine_drop_slot)
 
 	var shrine_vbox := VBoxContainer.new()
@@ -366,11 +465,12 @@ func _build_center_panel(parent: HBoxContainer) -> void:
 func _build_slot_panel(slot_key: String, label_text: String) -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = SLOT_SIZE
-	_set_panel_border(panel, Color(0.30, 0.26, 0.18))
+	panel.clip_contents = true
+	_set_panel_border(panel, SLOT_BORDER_COLOR)
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 2)
 	panel.add_child(vbox)
-	var lbl := _make_label(label_text, 10, Color(0.38, 0.36, 0.32))
+	var lbl := _make_label(label_text, 10, Color(0.68, 0.62, 0.5))
 	lbl.name = "SlotLabel"
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -379,16 +479,45 @@ func _build_slot_panel(slot_key: String, label_text: String) -> PanelContainer:
 	return panel
 
 func _build_right_panel(parent: HBoxContainer) -> void:
-	var vbox := VBoxContainer.new()
-	vbox.custom_minimum_size = Vector2(480, 0)
-	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.add_theme_constant_override("separation", 8)
-	parent.add_child(vbox)
+	var col := Control.new()
+	col.custom_minimum_size = Vector2(COL_RIGHT, 0)
+	col.size_flags_horizontal = Control.SIZE_SHRINK_END
+	col.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col.clip_contents = true
+	parent.add_child(col)
+
+	var outer_vbox := VBoxContainer.new()
+	outer_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	outer_vbox.add_theme_constant_override("separation", 6)
+	outer_vbox.clip_contents = true
+	col.add_child(outer_vbox)
+
+	var grid_section := PanelContainer.new()
+	grid_section.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	grid_section.size_flags_stretch_ratio = RIGHT_BACKPACK_STRETCH
+	grid_section.clip_contents = true
+	grid_section.add_theme_stylebox_override("panel", FantasyUiAssets.section_box_compact())
+	outer_vbox.add_child(grid_section)
+
+	var grid_pad := MarginContainer.new()
+	grid_pad.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	grid_pad.add_theme_constant_override("margin_left", 0)
+	grid_pad.add_theme_constant_override("margin_right", 0)
+	grid_pad.add_theme_constant_override("margin_top", 0)
+	grid_pad.add_theme_constant_override("margin_bottom", 0)
+	grid_section.add_child(grid_pad)
+
+	var grid_vbox := VBoxContainer.new()
+	grid_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	grid_vbox.add_theme_constant_override("separation", 2)
+	grid_vbox.alignment = BoxContainer.ALIGNMENT_BEGIN
+	grid_pad.add_child(grid_vbox)
 
 	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 8)
-	vbox.add_child(header)
-	var bp_title := _make_label("BACKPACK", 16, Color(0.95, 0.82, 0.30))
+	header.add_theme_constant_override("separation", 4)
+	header.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	grid_vbox.add_child(header)
+	var bp_title := _make_label("BACKPACK", 14, UI_ACCENT_GOLD)
 	bp_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(bp_title)
 	_backpack_title = bp_title
@@ -398,9 +527,10 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 		var btn := Button.new()
 		btn.text = sort_label
 		btn.focus_mode = Control.FOCUS_NONE
-		btn.custom_minimum_size = Vector2(70, 30)
-		btn.add_theme_font_size_override("font_size", 13)
-		if _font: btn.add_theme_font_override("font", _font)
+		btn.custom_minimum_size = Vector2(52, 24)
+		btn.add_theme_font_size_override("font_size", 12)
+		if _font:
+			btn.add_theme_font_override("font", _font)
 		btn.pressed.connect(func():
 			match captured_label:
 				"All":    _sort_mode = SortMode.NONE
@@ -408,59 +538,78 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 				"Rarity": _sort_mode = SortMode.RARITY
 			_refresh_backpack()
 		)
-		_style_small_btn(btn, Color(0.55, 0.75, 1.0))
+		_style_small_btn(btn, UI_ACCENT_GOLD)
 		header.add_child(btn)
-
-	vbox.add_child(_make_hsep())
 
 	_backpack_scroll = ScrollContainer.new()
 	_backpack_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_backpack_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_backpack_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	vbox.add_child(_backpack_scroll)
+	_backpack_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_style_backpack_scroll(_backpack_scroll)
+	grid_vbox.add_child(_backpack_scroll)
 
 	_item_grid = GridContainer.new()
-	_item_grid.columns = 6
-	_item_grid.add_theme_constant_override("h_separation", 8)
-	_item_grid.add_theme_constant_override("v_separation", 8)
+	_item_grid.columns = BACKPACK_COLS
+	_item_grid.add_theme_constant_override("h_separation", 4)
+	_item_grid.add_theme_constant_override("v_separation", 4)
 	_item_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_backpack_scroll.add_child(_item_grid)
 
-	vbox.add_child(_make_hsep())
-
 	var details := PanelContainer.new()
-	details.custom_minimum_size = Vector2(0, 130)
-	var dsb := StyleBoxFlat.new()
-	dsb.bg_color = Color(0.05, 0.04, 0.07, 0.95)
-	dsb.border_color = Color(0.30, 0.26, 0.18, 0.8)
-	dsb.set_border_width_all(1)
-	dsb.set_corner_radius_all(8)
-	details.add_theme_stylebox_override("panel", dsb)
-	vbox.add_child(details)
+	details.custom_minimum_size = Vector2(0, RIGHT_DETAILS_MIN_H)
+	details.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	details.size_flags_stretch_ratio = RIGHT_DETAILS_STRETCH
+	details.clip_contents = true
+	details.add_theme_stylebox_override("panel", FantasyUiAssets.section_box_compact())
+	outer_vbox.add_child(details)
+	_details_panel = details
+
+	var det_pad := MarginContainer.new()
+	det_pad.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	det_pad.add_theme_constant_override("margin_left", 0)
+	det_pad.add_theme_constant_override("margin_right", 0)
+	det_pad.add_theme_constant_override("margin_top", 0)
+	det_pad.add_theme_constant_override("margin_bottom", 0)
+	details.add_child(det_pad)
 
 	var det_vbox := VBoxContainer.new()
-	det_vbox.add_theme_constant_override("separation", 6)
-	details.add_child(det_vbox)
+	det_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	det_vbox.add_theme_constant_override("separation", 2)
+	det_vbox.alignment = BoxContainer.ALIGNMENT_BEGIN
+	det_pad.add_child(det_vbox)
 
-	_item_name = _make_label("[Select an item]", 17, Color(0.90, 0.88, 0.85))
+	_item_name = _make_label("[Select an item]", 14, Color(0.90, 0.88, 0.85))
+	_item_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_item_name.max_lines_visible = 1
+	_item_name.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_item_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_item_name.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	det_vbox.add_child(_item_name)
+
 	_item_stats = RichTextLabel.new()
 	_item_stats.bbcode_enabled = true
-	_item_stats.fit_content = true
-	_item_stats.scroll_active = false
+	_item_stats.fit_content = false
+	_item_stats.scroll_active = true
 	_item_stats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_item_stats.add_theme_font_size_override("normal_font_size", 13)
+	_item_stats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_item_stats.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_item_stats.size_flags_stretch_ratio = 1.0
+	_item_stats.add_theme_font_size_override("normal_font_size", 12)
 	_item_stats.add_theme_color_override("default_color", Color(0.78, 0.75, 0.70))
 	if _font:
 		_item_stats.add_theme_font_override("normal_font", _font)
 	det_vbox.add_child(_item_stats)
 
 	var btn_row := HBoxContainer.new()
-	btn_row.add_theme_constant_override("separation", 10)
+	btn_row.add_theme_constant_override("separation", 6)
+	btn_row.size_flags_vertical = Control.SIZE_SHRINK_END
+	btn_row.alignment = BoxContainer.ALIGNMENT_END
 	det_vbox.add_child(btn_row)
 
 	_equip_btn = Button.new()
 	_equip_btn.text = "EQUIP"
-	_equip_btn.custom_minimum_size = Vector2(120, 38)
+	_equip_btn.custom_minimum_size = Vector2(88, 26)
 	_equip_btn.focus_mode = Control.FOCUS_NONE
 	_equip_btn.pressed.connect(_on_equip)
 	_style_action_btn(_equip_btn, Color(0.95, 0.82, 0.30))
@@ -468,7 +617,7 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 
 	_drop_btn = Button.new()
 	_drop_btn.text = "DROP"
-	_drop_btn.custom_minimum_size = Vector2(120, 38)
+	_drop_btn.custom_minimum_size = Vector2(88, 26)
 	_drop_btn.focus_mode = Control.FOCUS_NONE
 	_drop_btn.pressed.connect(_on_drop)
 	_style_action_btn(_drop_btn, Color(0.75, 0.25, 0.20))
@@ -477,11 +626,12 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 	_shrine_btn_row = HBoxContainer.new()
 	_shrine_btn_row.add_theme_constant_override("separation", 10)
 	_shrine_btn_row.visible = false
+	_shrine_btn_row.size_flags_vertical = Control.SIZE_SHRINK_END
 	det_vbox.add_child(_shrine_btn_row)
 
 	_shrine_confirm_btn = Button.new()
 	_shrine_confirm_btn.text = "MAKE PERMANENT"
-	_shrine_confirm_btn.custom_minimum_size = Vector2(180, 38)
+	_shrine_confirm_btn.custom_minimum_size = Vector2(160, 32)
 	_shrine_confirm_btn.focus_mode = Control.FOCUS_NONE
 	_shrine_confirm_btn.pressed.connect(_on_shrine_confirm_pressed)
 	_style_action_btn(_shrine_confirm_btn, Color(0.55, 0.90, 0.45))
@@ -489,7 +639,7 @@ func _build_right_panel(parent: HBoxContainer) -> void:
 
 	_shrine_cancel_btn = Button.new()
 	_shrine_cancel_btn.text = "REMOVE"
-	_shrine_cancel_btn.custom_minimum_size = Vector2(120, 38)
+	_shrine_cancel_btn.custom_minimum_size = Vector2(110, 32)
 	_shrine_cancel_btn.focus_mode = Control.FOCUS_NONE
 	_shrine_cancel_btn.pressed.connect(_clear_shrine_offer)
 	_style_action_btn(_shrine_cancel_btn, Color(0.75, 0.25, 0.20))
@@ -501,6 +651,7 @@ func open(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
 	_apply_mode_ui()
 	inventory    = inv
 	equipped     = eq
+	_sync_equipped_armor_types()
 	player_stats = stats
 	_sync_char_portrait()
 	_refresh_stats()
@@ -508,6 +659,7 @@ func open(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
 	_refresh_backpack()
 	_clear_selection()
 	visible = true
+	_play_inventory_flap_sfx()
 	move_to_front()
 
 
@@ -516,6 +668,7 @@ func open_shrine(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
 	shrine_mode = true
 	inventory = inv
 	equipped = eq
+	_sync_equipped_armor_types()
 	player_stats = stats
 	_clear_shrine_offer()
 	_apply_mode_ui()
@@ -525,6 +678,7 @@ func open_shrine(inv: Dictionary, eq: Dictionary, stats: Dictionary) -> void:
 	_refresh_backpack()
 	_clear_selection()
 	visible = true
+	_play_inventory_flap_sfx()
 	move_to_front()
 
 
@@ -533,6 +687,7 @@ func open_home_loadout() -> void:
 	shrine_mode = false
 	_apply_mode_ui()
 	_reload_home_data()
+	_sync_equipped_armor_types()
 	player_stats = _build_home_player_stats()
 	_sync_char_portrait()
 	_refresh_stats()
@@ -540,7 +695,13 @@ func open_home_loadout() -> void:
 	_refresh_backpack()
 	_clear_selection()
 	visible = true
+	_play_inventory_flap_sfx()
 	move_to_front()
+
+
+func _play_inventory_flap_sfx() -> void:
+	if GameAudio:
+		GameAudio.play_inventory_flap()
 
 
 func _apply_mode_ui() -> void:
@@ -559,7 +720,7 @@ func _apply_mode_ui() -> void:
 		else:
 			_backpack_title.text = "BACKPACK"
 	if _overlay:
-		_overlay.color = Color(0, 0, 0, 0.58) if shrine_mode else Color(0, 0, 0, 0.72)
+		_overlay.color = OVERLAY_COLOR_SHRINE if shrine_mode else OVERLAY_COLOR_INVENTORY
 	if _left_panel:
 		_left_panel.visible = not shrine_mode
 	for key in _stats_plus_buttons:
@@ -612,11 +773,18 @@ func _reload_home_data() -> void:
 	equipped = GameState.loadout_as_equipped_dict()
 
 
+func _sync_equipped_armor_types() -> void:
+	for slot_key in ArmorSetRules.SET_SLOTS:
+		var it: Dictionary = equipped.get(slot_key, {})
+		ArmorSetRules.ensure_armor_type(it)
+
+
 func _home_equip_item(slot_key: String, idx: int) -> void:
 	var arr: Array = inventory.get(slot_key, [])
 	if idx < 0 or idx >= arr.size():
 		return
 	var item: Dictionary = arr[idx].duplicate(true)
+	ArmorSetRules.ensure_armor_type(item)
 	item["permanent"] = true
 
 	var old_eq: Dictionary = equipped.get(slot_key, {})
@@ -632,6 +800,8 @@ func _home_equip_item(slot_key: String, idx: int) -> void:
 	GameState.run["loadout"][slot_key] = [item.duplicate(true)]
 	equipped[slot_key] = item
 	_reload_home_data()
+	if GameAudio:
+		GameAudio.play_item_equip()
 	loadout_changed.emit()
 
 
@@ -648,6 +818,7 @@ func _home_unequip_item(slot_key: String) -> void:
 	loadout_changed.emit()
 
 func _on_close() -> void:
+	_play_inventory_flap_sfx()
 	var was_shrine := shrine_mode
 	visible = false
 	if shrine_mode:
@@ -673,56 +844,71 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func _refresh_stats() -> void:
+	var home_gear := _equipment_primary_bonus_totals() if home_mode else {}
 	for key in _stats_labels:
 		var lbl: Label = _stats_labels[key]
 		if key == "hp":
-			lbl.text = "%d / %d" % [int(player_stats.get("hp", 0)), int(player_stats.get("max_hp", 0))]
+			var max_hp := int(player_stats.get("max_hp", 0))
+			if home_mode:
+				var helm: Dictionary = equipped.get("helmet", {})
+				if not helm.is_empty():
+					max_hp += int(helm.get("hp_bonus", 0))
+			lbl.text = "%d / %d" % [int(player_stats.get("hp", 0)), max_hp]
 		elif key == "total_armor":
 			lbl.text = str(_calc_total_armor())
 		elif key == "total_dmg":
 			lbl.text = str(_calc_total_dmg())
+		elif key in ["str", "agi", "vit", "crit"]:
+			var val := int(player_stats.get(key, 0))
+			if home_mode:
+				val += int(home_gear.get(key, 0))
+			lbl.text = str(val)
 		else:
 			lbl.text = str(int(player_stats.get(key, 0)))
 	var has_points := int(player_stats.get("stat_points", 0)) > 0
 	for key in _stats_plus_buttons:
 		var btn: Button = _stats_plus_buttons[key]
 		btn.disabled = not has_points
+	if _gear_summary_label:
+		_gear_summary_label.text = _build_gear_summary_text()
+
+
+func _build_gear_summary_text() -> String:
+	return ArmorSetRules.build_summary(equipped)
+
 
 func _calc_total_armor() -> int:
 	var base := 0
 	var armor_item: Dictionary = equipped.get("armor", {})
 	if not armor_item.is_empty():
 		base = int(armor_item.get("armor", 0))
-	var types: Array[String] = []
-	for k in ["armor", "helmet", "gloves", "boots"]:
-		var it: Dictionary = equipped.get(k, {})
-		if not it.is_empty():
-			var t := String(it.get("armor_type", ""))
-			if t != "" and t != "berserker":
-				types.append(t)
-	var bonus := 0
-	if types.size() >= 2:
-		var counts := {}
-		for t in types:
-			counts[t] = int(counts.get(t, 0)) + 1
-		for t in counts.keys():
-			var c := int(counts[t])
-			if c == 2:
-				bonus = max(bonus, 1)
-			elif c >= 3:
-				bonus = max(bonus, 2)
+	var bonus := ArmorSetRules.armor_set_bonus(ArmorSetRules.type_counts(equipped))
 	var extra_armor := int(player_stats.get("passive_armor_bonus", 0))
 	return clamp(base + bonus + extra_armor, 0, 15)
 
+
 func _flat_weapon_dmg_from_armor_pieces() -> int:
-	var total := 0
-	for k in ["helmet", "armor", "gloves", "boots"]:
-		var it: Dictionary = equipped.get(k, {})
+	var counts := ArmorSetRules.type_counts(equipped)
+	var total := ArmorSetRules.berserker_set_dmg_bonus(counts)
+	for slot_key in ArmorSetRules.SET_SLOTS:
+		var it: Dictionary = equipped.get(slot_key, {})
 		if it.is_empty():
 			continue
 		var b: Dictionary = it.get("bonuses", {})
 		total += int(b.get("weapon_dmg", 0))
 	return total
+
+
+func _equipment_primary_bonus_totals() -> Dictionary:
+	var acc := {"str": 0, "agi": 0, "vit": 0, "crit": 0}
+	for slot_key in SLOT_CONFIG.keys():
+		var it: Dictionary = equipped.get(slot_key, {})
+		if it.is_empty():
+			continue
+		var totals := _item_bonus_totals(it, slot_key)
+		for k in acc.keys():
+			acc[k] = int(acc[k]) + int(totals.get(k, 0))
+	return acc
 
 
 func _calc_total_dmg() -> int:
@@ -745,10 +931,21 @@ func _refresh_all_slots() -> void:
 	for slot_key in _slot_panels:
 		_refresh_slot(slot_key)
 
+
+func _pin_slot_geometry(panel: PanelContainer, pos: Vector2) -> void:
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.offset_left = pos.x - SLOT_SIZE.x * 0.5
+	panel.offset_right = pos.x + SLOT_SIZE.x * 0.5
+	panel.offset_top = pos.y - SLOT_SIZE.y * 0.5
+	panel.offset_bottom = pos.y + SLOT_SIZE.y * 0.5
+
+
 func _refresh_slot(slot_key: String) -> void:
 	var panel: PanelContainer = _slot_panels.get(slot_key)
 	if not panel: return
-	# Sloty nie mogą zmieniać rozmiaru (zawartość nie może ich "rozpychać")
+	var cfg: Dictionary = SLOT_CONFIG.get(slot_key, {})
+	_pin_slot_geometry(panel, cfg.get("pos", Vector2.ZERO) as Vector2)
+	panel.clip_contents = true
 	panel.custom_minimum_size = SLOT_SIZE
 	panel.size = SLOT_SIZE
 	panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -756,15 +953,17 @@ func _refresh_slot(slot_key: String) -> void:
 	for c in panel.get_children():
 		c.queue_free()
 	var item: Dictionary = equipped.get(slot_key, {})
-	var cfg: Dictionary  = SLOT_CONFIG.get(slot_key, {})
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 2)
-	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override("separation", 0)
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.offset_left = 2
+	vbox.offset_right = -2
+	vbox.offset_top = 2
+	vbox.offset_bottom = -2
 	panel.add_child(vbox)
 
 	if item.is_empty():
-		_set_panel_border(panel, Color(0.28, 0.24, 0.16))
+		_set_panel_border(panel, SLOT_BORDER_EMPTY)
 		var lbl := _make_label(str(cfg.get("label", slot_key)), 10, Color(0.38, 0.36, 0.32))
 		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -780,23 +979,21 @@ func _refresh_slot(slot_key: String) -> void:
 			tr.texture = tex
 			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-			tr.custom_minimum_size = Vector2(46, 46)
+			tr.custom_minimum_size = Vector2(40, 40)
 			tr.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-			tr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			tr.size_flags_vertical = Control.SIZE_EXPAND_FILL
 			vbox.add_child(tr)
-		var name_lbl := _make_label(str(item.get("name", "?")), 9, col)
-		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		name_lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
-		name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		name_lbl.clip_text = true
-		name_lbl.custom_minimum_size = Vector2(SLOT_SIZE.x - 8.0, 0)
-		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		name_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		vbox.add_child(name_lbl)
-		if bool(item.get("permanent", false)):
-			var perm := _make_label("*", 11, Color(0.55, 0.90, 0.45))
-			perm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			vbox.add_child(perm)
+		else:
+			var short_name := str(item.get("name", "?"))
+			if short_name.length() > 7:
+				short_name = short_name.substr(0, 7) + "."
+			var name_lbl := _make_label(short_name, 8, col)
+			name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			name_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			name_lbl.clip_text = true
+			name_lbl.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			vbox.add_child(name_lbl)
 		var hover_btn := Button.new()
 		hover_btn.flat = true
 		hover_btn.focus_mode = Control.FOCUS_NONE
@@ -851,7 +1048,7 @@ func _refresh_backpack() -> void:
 
 	if all_items.is_empty():
 		var empty_msg := "No items to sanctify." if shrine_mode else ("No permanent items stored." if home_mode else "Backpack is empty.")
-		_item_grid.add_child(_make_label(empty_msg, 15, Color(0.45, 0.45, 0.45)))
+		_item_grid.add_child(_make_label(empty_msg, 15, Color(0.58, 0.54, 0.46)))
 		return
 
 	for entry in all_items:
@@ -862,7 +1059,9 @@ func _refresh_backpack() -> void:
 		var col: Color          = RARITY_COLORS[r]
 
 		var tile := PanelContainer.new()
-		tile.custom_minimum_size = Vector2(68, 68)
+		tile.custom_minimum_size = BACKPACK_TILE
+		tile.size = BACKPACK_TILE
+		tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_set_panel_border(tile, col)
 		tile.mouse_filter = Control.MOUSE_FILTER_STOP
 
@@ -876,7 +1075,7 @@ func _refresh_backpack() -> void:
 			tr.texture = tex
 			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-			tr.custom_minimum_size = Vector2(36, 36)
+			tr.custom_minimum_size = Vector2(34, 34)
 			tr.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 			tr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			vbox.add_child(tr)
@@ -933,6 +1132,7 @@ func _refresh_backpack() -> void:
 		tile.add_child(btn)
 		_item_grid.add_child(tile)
 
+
 func _select_item(item: Dictionary, slot_key: String, idx: int, tile: PanelContainer) -> void:
 	if _selected_tile and is_instance_valid(_selected_tile):
 		var prev_r: int = clamp(int(selected_item.get("rarity", 0)), 0, RARITY_COLORS.size() - 1)
@@ -941,7 +1141,7 @@ func _select_item(item: Dictionary, slot_key: String, idx: int, tile: PanelConta
 	selected_slot  = slot_key
 	selected_idx   = idx
 	_selected_tile = tile
-	_set_panel_border(tile, Color(1, 1, 1))
+	_set_panel_border(tile, SLOT_BORDER_SELECTED)
 
 	_show_item_details(item, slot_key, false, idx)
 	if shrine_mode:
@@ -978,6 +1178,7 @@ func _on_equip() -> void:
 	if home_mode:
 		_home_equip_item(selected_slot, selected_idx)
 		_clear_selection()
+		_refresh_stats()
 		_refresh_all_slots()
 		_refresh_backpack()
 		return
@@ -999,14 +1200,27 @@ func _show_item_details(item: Dictionary, slot_key: String, from_hover: bool, id
 	_item_name.text = "%s  [%s]" % [str(item.get("name", "?")), RARITY_NAMES[r]]
 	_item_name.add_theme_color_override("font_color", RARITY_COLORS[r])
 	var lines := _build_item_description(item, slot_key)
-	if Input.is_key_pressed(KEY_SHIFT):
-		var eq_item: Dictionary = equipped.get(slot_key, {})
+	if _shift_compare_active or Input.is_key_pressed(KEY_SHIFT):
+		var cmp_slot := _compare_slot_for_item(item, slot_key)
+		var eq_item: Dictionary = equipped.get(cmp_slot, {})
 		if not eq_item.is_empty():
-			lines += "\n\nCOMPARE\n%s" % _build_compare_block(item, eq_item, slot_key)
+			lines += "\n\n[b]COMPARE[/b] (vs %s)\n%s" % [cmp_slot.capitalize(), _build_compare_block(item, eq_item, cmp_slot)]
 		else:
-			lines += "\n\nCOMPARE\nNo equipped item in this slot."
+			lines += "\n\n[b]COMPARE[/b]\nNo equipped item in this slot."
+	else:
+		lines += "\n[font_size=11][color=#6A6258](Shift — compare with equipped)[/color][/font_size]"
 	_item_stats.text = lines
+	if _item_stats:
+		_item_stats.scroll_to_line(0)
 	_showing_hover_details = from_hover and idx != selected_idx
+
+
+func _compare_slot_for_item(item: Dictionary, slot_key: String) -> String:
+	var item_type := str(item.get("type", slot_key))
+	if item_type in SLOT_CONFIG:
+		return item_type
+	return slot_key
+
 
 func _bonus_weapon_dmg_from_item(item: Dictionary) -> int:
 	return int(item.get("bonuses", {}).get("weapon_dmg", 0))
@@ -1044,7 +1258,7 @@ func _item_bonus_totals(item: Dictionary, slot_key: String) -> Dictionary:
 
 func _build_item_description(item: Dictionary, slot_key: String) -> String:
 	var lines := "Slot: %s" % slot_key.capitalize()
-	var armor_type := String(item.get("armor_type", ""))
+	var armor_type := ArmorSetRules.infer_armor_type(item)
 	match slot_key:
 		"weapon":
 			lines += "\nDMG base: %d" % int(item.get("base", 0))
@@ -1054,6 +1268,9 @@ func _build_item_description(item: Dictionary, slot_key: String) -> String:
 				for k in scale_dict:
 					s += "  %s×%.1f" % [k.to_upper(), float(scale_dict[k])]
 				lines += "\nScaling:%s" % s
+			var bleed_chance := StatusEffectDefs.bleed_base_proc_chance_for_item(item)
+			if bleed_chance >= 0.0:
+				lines += "\nBleed chance: %d%%" % int(round(bleed_chance * 100.0))
 		"armor":
 			if item.has("armor"):
 				lines += "\nArmor: %d" % int(item.get("armor", 0))
@@ -1061,6 +1278,9 @@ func _build_item_description(item: Dictionary, slot_key: String) -> String:
 				lines += "\nDamage Reduction: %.0f%%" % (float(item.get("dr", 0)) * 100)
 		"helmet":
 			lines += "\nHP Bonus: +%d" % int(item.get("hp_bonus", 0))
+		"gloves", "boots":
+			if item.has("armor"):
+				lines += "\nArmor: %d" % int(item.get("armor", 0))
 		"necklace":
 			lines += "\nCrit mult: +%.0f%%" % (float(item.get("crit_bonus", 0.0)) * 100.0)
 			lines += "\nBonus stat: %s" % str(item.get("bonus_stat", "—")).to_upper()
@@ -1069,9 +1289,9 @@ func _build_item_description(item: Dictionary, slot_key: String) -> String:
 	if armor_type != "" and slot_key in ["armor", "helmet", "gloves", "boots"]:
 		lines += "\nType: %s" % armor_type.capitalize()
 		if armor_type != "berserker":
-			lines += "\n(Set bonus: counts toward light/medium/heavy)"
+			lines += "\n(Set bonus: counts toward light/medium/heavy armor)"
 		else:
-			lines += "\n(No armor set bonus — adds flat damage)"
+			lines += "\n(Berserker set: +1/+2/+3 flat DMG at 2/3/4 pieces)"
 	lines = _append_item_bonus_lines(lines, _item_bonus_totals(item, slot_key))
 	if bool(item.get("permanent", false)):
 		lines += "\n★ PERMANENT"
@@ -1080,43 +1300,79 @@ func _build_item_description(item: Dictionary, slot_key: String) -> String:
 func _build_compare_block(candidate: Dictionary, equipped_item: Dictionary, slot_key: String) -> String:
 	var cmp_lines := "Current: %s" % str(equipped_item.get("name", "—"))
 	match slot_key:
-		"weapon", "gloves", "boots", "ring1", "ring2":
+		"weapon":
 			var cand_base := int(candidate.get("base", 0))
 			var eq_base := int(equipped_item.get("base", 0))
-			var delta_base := cand_base - eq_base
-			cmp_lines += "\nBase: %d (%s)" % [cand_base, _fmt_delta(delta_base, false)]
+			cmp_lines += "\nDMG base: %d (%s)" % [cand_base, _fmt_delta(cand_base - eq_base, false)]
+			var cand_scale: Dictionary = candidate.get("scale", {})
+			var eq_scale: Dictionary = equipped_item.get("scale", {})
+			if not cand_scale.is_empty() or not eq_scale.is_empty():
+				cmp_lines += "\nScaling: %s -> %s" % [_fmt_scale_dict(cand_scale), _fmt_scale_dict(eq_scale)]
+			var cand_bleed := StatusEffectDefs.bleed_base_proc_chance_for_item(candidate)
+			var eq_bleed := StatusEffectDefs.bleed_base_proc_chance_for_item(equipped_item)
+			if cand_bleed >= 0.0 or eq_bleed >= 0.0:
+				var cand_pct := int(round(cand_bleed * 100.0)) if cand_bleed >= 0.0 else 0
+				var eq_pct := int(round(eq_bleed * 100.0)) if eq_bleed >= 0.0 else 0
+				cmp_lines += "\nBleed chance: %d%% (%s)" % [cand_pct, _fmt_delta(float(cand_pct - eq_pct), true)]
 		"armor":
 			if candidate.has("armor") or equipped_item.has("armor"):
 				var cand_a := int(candidate.get("armor", 0))
 				var eq_a := int(equipped_item.get("armor", 0))
-				var delta_a := cand_a - eq_a
-				cmp_lines += "\nArmor: %d (%s)" % [cand_a, _fmt_delta(delta_a, false)]
+				cmp_lines += "\nArmor: %d (%s)" % [cand_a, _fmt_delta(cand_a - eq_a, false)]
 			else:
 				var cand_dr := float(candidate.get("dr", 0))
 				var eq_dr := float(equipped_item.get("dr", 0))
-				var delta_dr := (cand_dr - eq_dr) * 100.0
-				cmp_lines += "\nDR: %.0f%% (%s)" % [cand_dr * 100.0, _fmt_delta(delta_dr, true)]
+				cmp_lines += "\nDR: %.0f%% (%s)" % [cand_dr * 100.0, _fmt_delta((cand_dr - eq_dr) * 100.0, true)]
 		"helmet":
 			var cand_hp := int(candidate.get("hp_bonus", 0))
 			var eq_hp := int(equipped_item.get("hp_bonus", 0))
-			var delta_hp := cand_hp - eq_hp
-			cmp_lines += "\nHP Bonus: %d (%s)" % [cand_hp, _fmt_delta(delta_hp, false)]
+			cmp_lines += "\nHP Bonus: %d (%s)" % [cand_hp, _fmt_delta(cand_hp - eq_hp, false)]
 		"necklace":
+			var cand_crit := float(candidate.get("crit_bonus", 0.0))
+			var eq_crit := float(equipped_item.get("crit_bonus", 0.0))
+			cmp_lines += "\nCrit mult: +%.0f%% (%s)" % [
+				cand_crit * 100.0,
+				_fmt_delta((cand_crit - eq_crit) * 100.0, true)
+			]
 			cmp_lines += "\nBonus stat: %s -> %s" % [
 				str(equipped_item.get("bonus_stat", "—")).to_upper(),
 				str(candidate.get("bonus_stat", "—")).to_upper()
 			]
-	if slot_key in ["armor", "helmet", "gloves", "boots"]:
-		var cand_wd := _bonus_weapon_dmg_from_item(candidate)
-		var eq_wd := _bonus_weapon_dmg_from_item(equipped_item)
-		if cand_wd != 0 or eq_wd != 0:
-			cmp_lines += "\nFlat DMG: %d (%s)" % [cand_wd, _fmt_delta(cand_wd - eq_wd, false)]
-	var cand_bonus_value := int(candidate.get("bonus_value", 0))
-	var eq_bonus_value := int(equipped_item.get("bonus_value", 0))
-	if str(candidate.get("bonus_stat", "")) != "":
-		var delta_bonus := cand_bonus_value - eq_bonus_value
-		cmp_lines += "\nBonus value: %d (%s)" % [cand_bonus_value, _fmt_delta(delta_bonus, false)]
+		"ring1", "ring2":
+			cmp_lines += "\nSkill: %s -> %s" % [
+				String(equipped_item.get("skill_id", "—")),
+				String(candidate.get("skill_id", "—"))
+			]
+		"gloves", "boots":
+			if candidate.has("armor") or equipped_item.has("armor"):
+				var cand_ga := int(candidate.get("armor", 0))
+				var eq_ga := int(equipped_item.get("armor", 0))
+				cmp_lines += "\nArmor: %d (%s)" % [cand_ga, _fmt_delta(cand_ga - eq_ga, false)]
+	var cand_totals := _item_bonus_totals(candidate, slot_key)
+	var eq_totals := _item_bonus_totals(equipped_item, slot_key)
+	for key in ["str", "agi", "vit", "crit"]:
+		var cand_v := int(cand_totals.get(key, 0))
+		var eq_v := int(eq_totals.get(key, 0))
+		if cand_v != 0 or eq_v != 0:
+			cmp_lines += "\n%s: %d (%s)" % [key.to_upper(), cand_v, _fmt_delta(cand_v - eq_v, false)]
+	var cand_wd := int(cand_totals.get("weapon_dmg", 0))
+	var eq_wd := int(eq_totals.get("weapon_dmg", 0))
+	if cand_wd != 0 or eq_wd != 0:
+		cmp_lines += "\nFlat DMG: %d (%s)" % [cand_wd, _fmt_delta(cand_wd - eq_wd, false)]
+	var cand_type := ArmorSetRules.infer_armor_type(candidate)
+	var eq_type := ArmorSetRules.infer_armor_type(equipped_item)
+	if cand_type != "" or eq_type != "":
+		cmp_lines += "\nType: %s -> %s" % [eq_type.capitalize() if eq_type != "" else "—", cand_type.capitalize() if cand_type != "" else "—"]
 	return cmp_lines
+
+
+func _fmt_scale_dict(scale_dict: Dictionary) -> String:
+	if scale_dict.is_empty():
+		return "—"
+	var parts: PackedStringArray = []
+	for k in scale_dict:
+		parts.append("%s×%.1f" % [k.to_upper(), float(scale_dict[k])])
+	return ", ".join(parts)
 
 func _fmt_delta(delta: float, with_percent: bool) -> String:
 	var text := "%+d" % int(delta)
@@ -1177,12 +1433,14 @@ func _finish_drag_item() -> void:
 			if target_slot != "" and target_slot == _drag_slot:
 				_home_equip_item(_drag_slot, _drag_idx)
 				_clear_selection()
+				_refresh_stats()
 				_refresh_all_slots()
 				_refresh_backpack()
 		elif _drag_source == "equipped":
 			if _backpack_scroll and _backpack_scroll.get_global_rect().has_point(mouse):
 				_home_unequip_item(_drag_slot)
 				_clear_selection()
+				_refresh_stats()
 				_refresh_all_slots()
 				_refresh_backpack()
 	else:
@@ -1349,63 +1607,90 @@ func _make_label(txt: String, size: int, col: Color) -> Label:
 	if _font: l.add_theme_font_override("font", _font)
 	return l
 
-func _make_hsep() -> HSeparator:
-	var s := HSeparator.new()
-	s.add_theme_color_override("color", Color(0.35, 0.30, 0.22, 0.7))
-	return s
+func _make_hsep() -> Control:
+	return _make_gold_rule()
+
+
+func _make_gold_rule() -> Control:
+	var row := HBoxContainer.new()
+	row.custom_minimum_size = Vector2(0, 6)
+	var line := ColorRect.new()
+	line.color = FantasyUiAssets.TINT_DIVIDER
+	line.custom_minimum_size = Vector2(0, 2)
+	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(line)
+	return row
+
+
+func _style_backpack_scroll(scroll: ScrollContainer) -> void:
+	scroll.clip_contents = true
+	scroll.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	var vsb := scroll.get_v_scroll_bar()
+	if vsb == null:
+		return
+	var grabber := StyleBoxFlat.new()
+	grabber.bg_color = Color(0.32, 0.27, 0.20, 0.85)
+	grabber.set_corner_radius_all(2)
+	vsb.add_theme_stylebox_override("grabber", grabber)
+	vsb.add_theme_stylebox_override("grabber_highlight", grabber)
+	var track := StyleBoxFlat.new()
+	track.bg_color = Color(0.08, 0.06, 0.05, 0.6)
+	track.set_corner_radius_all(2)
+	vsb.add_theme_stylebox_override("scroll", track)
+	vsb.custom_minimum_size.x = 10
+
 
 func _set_panel_border(panel: PanelContainer, col: Color) -> void:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.08, 0.07, 0.10, 0.95)
-	sb.border_color = col
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(6)
-	panel.add_theme_stylebox_override("panel", sb)
+	var tint := Color(
+		clampf(col.r * 0.28 + 0.1, 0.0, 1.0),
+		clampf(col.g * 0.28 + 0.08, 0.0, 1.0),
+		clampf(col.b * 0.28 + 0.06, 0.0, 1.0),
+		1.0
+	)
+	panel.add_theme_stylebox_override("panel", FantasyUiAssets.slot_panel(tint))
 
-func _style_main_panel(panel: PanelContainer) -> void:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color     = Color(0.07, 0.06, 0.09, 0.97)
-	sb.border_color = Color(0.40, 0.35, 0.25, 1.0)
-	sb.set_border_width_all(3)
-	sb.set_corner_radius_all(14)
-	sb.shadow_size  = 18
-	sb.shadow_color = Color(0, 0, 0, 0.65)
-	panel.add_theme_stylebox_override("panel", sb)
 
 func _style_close_btn(btn: Button) -> void:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color     = Color(0.45, 0.10, 0.10, 0.9)
-	sb.border_color = Color(0.75, 0.20, 0.18)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(8)
-	btn.add_theme_stylebox_override("normal", sb)
-	btn.add_theme_color_override("font_color", Color(1, 0.6, 0.6))
-	btn.add_theme_font_size_override("font_size", 18)
-	if _font: btn.add_theme_font_override("font", _font)
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.32, 0.1, 0.08, 0.95)
+	normal.border_color = FantasyUiAssets.TINT_DIVIDER
+	normal.set_border_width_all(1)
+	normal.set_corner_radius_all(2)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.45, 0.14, 0.1, 0.98)
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", normal)
+	btn.add_theme_stylebox_override("focus", normal)
+	btn.add_theme_color_override("font_color", Color(1.0, 0.72, 0.68))
+	btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	btn.add_theme_font_size_override("font_size", 15)
+	if _font:
+		btn.add_theme_font_override("font", _font)
+
 
 func _style_action_btn(btn: Button, col: Color) -> void:
-	var sb_n := StyleBoxFlat.new()
-	sb_n.bg_color     = Color(col.r*0.20, col.g*0.20, col.b*0.20, 0.95)
-	sb_n.border_color = col
-	sb_n.set_border_width_all(2)
-	sb_n.set_corner_radius_all(8)
-	var sb_h := sb_n.duplicate() as StyleBoxFlat
-	sb_h.bg_color = Color(col.r*0.35, col.g*0.35, col.b*0.35, 0.95)
-	btn.add_theme_stylebox_override("normal", sb_n)
-	btn.add_theme_stylebox_override("hover",  sb_h)
-	btn.add_theme_color_override("font_color",       col)
+	var styles := FantasyUiAssets.tinted_button(
+		Color(col.r * 0.22 + 0.08, col.g * 0.22 + 0.06, col.b * 0.22 + 0.05, 1.0),
+		Color(col.r * 0.32 + 0.12, col.g * 0.32 + 0.09, col.b * 0.32 + 0.07, 1.0)
+	)
+	btn.add_theme_stylebox_override("normal", styles[0])
+	btn.add_theme_stylebox_override("hover", styles[1])
+	btn.add_theme_stylebox_override("pressed", styles[0])
+	btn.add_theme_stylebox_override("focus", styles[0])
+	btn.add_theme_color_override("font_color", col)
 	btn.add_theme_color_override("font_hover_color", Color(1, 1, 1))
 	btn.add_theme_font_size_override("font_size", 15)
-	if _font: btn.add_theme_font_override("font", _font)
+	if _font:
+		btn.add_theme_font_override("font", _font)
+
 
 func _style_small_btn(btn: Button, col: Color) -> void:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color     = Color(col.r*0.15, col.g*0.15, col.b*0.15, 0.95)
-	sb.border_color = col
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(6)
-	var sb_h := sb.duplicate() as StyleBoxFlat
-	sb_h.bg_color = Color(col.r*0.28, col.g*0.28, col.b*0.28, 0.95)
-	btn.add_theme_stylebox_override("normal", sb)
-	btn.add_theme_stylebox_override("hover",  sb_h)
+	btn.add_theme_stylebox_override("normal", FantasyUiAssets.button_normal())
+	btn.add_theme_stylebox_override("hover", FantasyUiAssets.button_hover())
+	btn.add_theme_stylebox_override("pressed", FantasyUiAssets.button_pressed())
+	btn.add_theme_stylebox_override("focus", FantasyUiAssets.button_normal())
 	btn.add_theme_color_override("font_color", col)
+	btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	if _font:
+		btn.add_theme_font_override("font", _font)

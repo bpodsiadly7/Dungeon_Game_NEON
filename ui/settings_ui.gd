@@ -7,20 +7,11 @@ const FONT_PATH := "res://MedievalSharp-Bold.ttf"
 const MENU_SCENE := "res://main_menu.tscn"
 
 const C_OVERLAY := Color(0.01, 0.01, 0.015, 0.82)
-const C_PANEL_OUTER := Color(0.05, 0.04, 0.035, 1.0)
-const C_PANEL_INNER := Color(0.08, 0.07, 0.06, 1.0)
-const C_HEADER := Color(0.03, 0.025, 0.02, 1.0)
-const C_SECTION := Color(0.1, 0.085, 0.065, 1.0)
 const C_GOLD := Color(0.78, 0.62, 0.22, 1.0)
 const C_GOLD_DIM := Color(0.48, 0.38, 0.14, 1.0)
 const C_GOLD_BRIGHT := Color(0.92, 0.78, 0.38, 1.0)
 const C_TEXT := Color(0.9, 0.86, 0.76, 1.0)
 const C_TEXT_DIM := Color(0.58, 0.54, 0.46, 1.0)
-const C_BTN := Color(0.11, 0.09, 0.07, 1.0)
-const C_BTN_HOVER := Color(0.18, 0.14, 0.1, 1.0)
-const C_BTN_PRESSED := Color(0.06, 0.05, 0.04, 1.0)
-const C_SLIDER_TRACK := Color(0.14, 0.11, 0.08, 1.0)
-const C_SLIDER_FILL := Color(0.55, 0.42, 0.16, 1.0)
 
 var _font: FontFile
 var _pause_root: Control
@@ -37,6 +28,7 @@ var _music_pct: Label
 var _sfx_pct: Label
 var _fullscreen_check: CheckButton
 var _fullscreen_embed_hint: Label
+var _pause_esc_close_frame: int = -1
 
 
 func _ready() -> void:
@@ -50,7 +42,7 @@ func _ready() -> void:
 		get_tree().scene_changed.connect(_on_scene_changed)
 
 
-func _on_scene_changed(_scene: Node) -> void:
+func _on_scene_changed() -> void:
 	ensure_game_unblocked()
 
 
@@ -79,6 +71,10 @@ func is_settings_open() -> bool:
 	return _settings_root != null and _settings_root.visible
 
 
+func is_pause_context() -> bool:
+	return _context == OpenContext.PAUSE
+
+
 func open_settings_from_menu() -> void:
 	ensure_game_unblocked()
 	_context = OpenContext.MENU
@@ -96,7 +92,7 @@ func open_pause(host: Node) -> void:
 	_pause_root.mouse_filter = Control.MOUSE_FILTER_STOP
 
 
-func close_pause(resume_game: bool = true) -> void:
+func close_pause(resume_game: bool = true, from_escape: bool = false) -> void:
 	if not is_pause_open() and not is_settings_open():
 		return
 	hide_roots()
@@ -104,6 +100,12 @@ func close_pause(resume_game: bool = true) -> void:
 		get_tree().paused = false
 	_pause_depth = 0
 	_pause_host = null
+	if from_escape:
+		_pause_esc_close_frame = Engine.get_process_frames()
+
+
+func should_block_pause_open() -> bool:
+	return _pause_esc_close_frame == Engine.get_process_frames()
 
 
 func close_settings() -> void:
@@ -127,6 +129,7 @@ func _show_settings() -> void:
 
 func _build_pause_ui() -> void:
 	_pause_root = Control.new()
+	_pause_root.process_mode = Node.PROCESS_MODE_ALWAYS
 	_pause_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_pause_root.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_pause_root)
@@ -149,6 +152,7 @@ func _build_pause_ui() -> void:
 
 func _build_settings_ui() -> void:
 	_settings_root = Control.new()
+	_settings_root.process_mode = Node.PROCESS_MODE_ALWAYS
 	_settings_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_settings_root.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_settings_root)
@@ -158,7 +162,7 @@ func _build_settings_ui() -> void:
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_settings_root.add_child(center)
 
-	var shell := _make_ornate_shell(Vector2(580, 600))
+	var shell := _make_ornate_shell(Vector2(620, 640))
 	center.add_child(shell)
 
 	var body := _populate_shell_body(shell, 10)
@@ -169,12 +173,19 @@ func _build_settings_ui() -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_style_scroll(scroll)
 	body.add_child(scroll)
+
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_theme_constant_override("margin_right", 8)
+	scroll.add_child(margin)
 
 	var vbox := VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vbox.add_theme_constant_override("separation", 14)
-	scroll.add_child(vbox)
+	vbox.add_theme_constant_override("separation", 12)
+	margin.add_child(vbox)
 
 	_add_settings_section(vbox, "AUDIO", func(section: VBoxContainer) -> void:
 		_master_slider = _add_volume_row(section, "Master", GameSettings.master_volume, _on_master_changed, true)
@@ -224,39 +235,27 @@ func _add_overlay(parent: Control) -> void:
 func _make_ornate_shell(size: Vector2) -> PanelContainer:
 	var outer := PanelContainer.new()
 	outer.custom_minimum_size = size
-	var outer_sb := StyleBoxFlat.new()
-	outer_sb.bg_color = C_PANEL_OUTER
-	outer_sb.border_color = C_GOLD_DIM
-	outer_sb.set_border_width_all(2)
-	outer_sb.set_corner_radius_all(2)
-	outer_sb.shadow_color = Color(0, 0, 0, 0.55)
-	outer_sb.shadow_size = 10
-	outer_sb.shadow_offset = Vector2(0, 4)
-	outer_sb.content_margin_left = 6
-	outer_sb.content_margin_right = 6
-	outer_sb.content_margin_top = 6
-	outer_sb.content_margin_bottom = 6
-	outer.add_theme_stylebox_override("panel", outer_sb)
+	outer.add_theme_stylebox_override("panel", FantasyUiAssets.shell_border())
+
+	var inset := MarginContainer.new()
+	inset.set_anchors_preset(Control.PRESET_FULL_RECT)
+	inset.add_theme_constant_override("margin_left", 10)
+	inset.add_theme_constant_override("margin_right", 10)
+	inset.add_theme_constant_override("margin_top", 10)
+	inset.add_theme_constant_override("margin_bottom", 10)
+	outer.add_child(inset)
 
 	var inner := PanelContainer.new()
 	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inner.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var inner_sb := StyleBoxFlat.new()
-	inner_sb.bg_color = C_PANEL_INNER
-	inner_sb.border_color = C_GOLD
-	inner_sb.set_border_width_all(1)
-	inner_sb.set_corner_radius_all(1)
-	inner_sb.content_margin_left = 18
-	inner_sb.content_margin_right = 18
-	inner_sb.content_margin_top = 14
-	inner_sb.content_margin_bottom = 14
-	inner.add_theme_stylebox_override("panel", inner_sb)
-	outer.add_child(inner)
+	inner.add_theme_stylebox_override("panel", FantasyUiAssets.shell_fill())
+	inset.add_child(inner)
+	outer.set_meta(&"inner_panel", inner)
 	return outer
 
 
 func _shell_inner(outer: PanelContainer) -> PanelContainer:
-	return outer.get_child(0) as PanelContainer
+	return outer.get_meta(&"inner_panel") as PanelContainer
 
 
 func _populate_shell_body(outer: PanelContainer, separation: int) -> VBoxContainer:
@@ -271,44 +270,42 @@ func _populate_shell_body(outer: PanelContainer, separation: int) -> VBoxContain
 
 func _make_title_header(text: String) -> Control:
 	var wrap := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = C_HEADER
-	sb.border_color = C_GOLD_DIM
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(1)
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
-	wrap.add_theme_stylebox_override("panel", sb)
+	wrap.add_theme_stylebox_override("panel", FantasyUiAssets.title_panel())
 
-	var title := _make_label(text, 28, C_GOLD_BRIGHT)
+	var title := _make_label(text, 26, C_GOLD_BRIGHT)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	wrap.add_child(title)
 	return wrap
 
 
+func _style_scroll(scroll: ScrollContainer) -> void:
+	scroll.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	var vsb := scroll.get_v_scroll_bar()
+	if vsb == null:
+		return
+	var grabber := StyleBoxFlat.new()
+	grabber.bg_color = Color(0.45, 0.36, 0.14, 0.85)
+	grabber.set_corner_radius_all(2)
+	vsb.add_theme_stylebox_override("grabber", grabber)
+	vsb.add_theme_stylebox_override("grabber_highlight", grabber)
+	var track := StyleBoxFlat.new()
+	track.bg_color = Color(0.08, 0.06, 0.05, 0.6)
+	track.set_corner_radius_all(2)
+	vsb.add_theme_stylebox_override("scroll", track)
+	vsb.custom_minimum_size.x = 10
+
+
 func _make_ornate_rule() -> Control:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 0)
+	row.custom_minimum_size = Vector2(0, 10)
 
-	var left := ColorRect.new()
-	left.custom_minimum_size = Vector2(0, 2)
-	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left.color = C_GOLD_DIM
-	row.add_child(left)
-
-	var gem := ColorRect.new()
-	gem.custom_minimum_size = Vector2(10, 10)
-	gem.color = C_GOLD
-	row.add_child(gem)
-
-	var right := ColorRect.new()
-	right.custom_minimum_size = Vector2(0, 2)
-	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right.color = C_GOLD_DIM
-	row.add_child(right)
+	var line := ColorRect.new()
+	line.color = FantasyUiAssets.TINT_DIVIDER
+	line.custom_minimum_size = Vector2(0, 2)
+	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(line)
 	return row
 
 
@@ -319,21 +316,12 @@ func _add_settings_section(parent: VBoxContainer, title: String, build: Callable
 	parent.add_child(section_title)
 
 	var box := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = C_SECTION
-	sb.border_color = C_GOLD_DIM
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(2)
-	sb.content_margin_left = 14
-	sb.content_margin_right = 14
-	sb.content_margin_top = 10
-	sb.content_margin_bottom = 10
-	box.add_theme_stylebox_override("panel", sb)
+	box.add_theme_stylebox_override("panel", FantasyUiAssets.section_box())
 	parent.add_child(box)
 
 	var section := VBoxContainer.new()
 	section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	section.add_theme_constant_override("separation", 10)
+	section.add_theme_constant_override("separation", 8)
 	box.add_child(section)
 	build.call(section)
 
@@ -374,24 +362,19 @@ func _make_menu_button(text: String, cb: Callable) -> Button:
 	btn.text = "  %s  " % text
 	btn.custom_minimum_size = Vector2(0, 44)
 	btn.focus_mode = Control.FOCUS_NONE
-	btn.pressed.connect(cb)
+	btn.pressed.connect(func() -> void:
+		if GameAudio:
+			GameAudio.play_menu_click()
+		cb.call()
+	)
 	_style_button(btn)
 	return btn
 
 
 func _style_button(btn: Button) -> void:
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = C_BTN
-	normal.border_color = C_GOLD_DIM
-	normal.set_border_width_all(1)
-	normal.set_corner_radius_all(1)
-	normal.content_margin_top = 4
-	normal.content_margin_bottom = 4
-	var hover := normal.duplicate()
-	(hover as StyleBoxFlat).bg_color = C_BTN_HOVER
-	(hover as StyleBoxFlat).border_color = C_GOLD
-	var pressed := normal.duplicate()
-	(pressed as StyleBoxFlat).bg_color = C_BTN_PRESSED
+	var normal := FantasyUiAssets.button_normal()
+	var hover := FantasyUiAssets.button_hover()
+	var pressed := FantasyUiAssets.button_pressed()
 	btn.add_theme_stylebox_override("normal", normal)
 	btn.add_theme_stylebox_override("hover", hover)
 	btn.add_theme_stylebox_override("pressed", pressed)
@@ -416,19 +399,10 @@ func _style_slider(slider: HSlider) -> void:
 	slider.min_value = 0.0
 	slider.max_value = 1.0
 	slider.step = 0.01
-	slider.custom_minimum_size = Vector2(120, 18)
+	slider.custom_minimum_size = Vector2(120, 20)
 
-	var track := StyleBoxFlat.new()
-	track.bg_color = C_SLIDER_TRACK
-	track.border_color = C_GOLD_DIM
-	track.set_border_width_all(1)
-	track.set_corner_radius_all(1)
-	track.content_margin_top = 4
-	track.content_margin_bottom = 4
-
-	var fill := StyleBoxFlat.new()
-	fill.bg_color = C_SLIDER_FILL
-	fill.set_corner_radius_all(1)
+	var track := FantasyUiAssets.slider_track()
+	var fill := FantasyUiAssets.slider_fill()
 
 	var grabber := StyleBoxFlat.new()
 	grabber.bg_color = C_GOLD_BRIGHT
@@ -532,8 +506,8 @@ func _on_music_changed(v: float) -> void:
 func _on_sfx_changed(v: float) -> void:
 	GameSettings.set_sfx_volume(v)
 	var audio := get_node_or_null("/root/GameAudio")
-	if audio:
-		audio.play_chest_slot_land()
+	if audio and audio.has_method("play_settings_sfx_preview"):
+		audio.play_settings_sfx_preview()
 
 
 func _on_resume_pressed() -> void:
@@ -556,12 +530,21 @@ func _on_main_menu_pressed() -> void:
 	get_tree().change_scene_to_file(MENU_SCENE)
 
 
-func _input(event: InputEvent) -> void:
-	if not is_pause_open() and not is_settings_open():
+func _process(_delta: float) -> void:
+	if not Input.is_action_just_pressed("ui_cancel"):
 		return
-	if event.is_action_pressed("ui_cancel"):
-		if is_settings_open():
+	handle_escape_pressed()
+
+
+func handle_escape_pressed() -> bool:
+	if not is_settings_open() and not is_pause_open():
+		return false
+	if is_settings_open():
+		if _context == OpenContext.PAUSE:
+			GameSettings.save_settings()
+			close_pause(true, true)
+		else:
 			close_settings()
-		elif is_pause_open():
-			close_pause(true)
-		get_viewport().set_input_as_handled()
+		return true
+	close_pause(true, true)
+	return true

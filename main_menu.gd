@@ -38,7 +38,11 @@ func _ready() -> void:
 func _wire_menu_button(btn: TextureButton, pressed_cb: Callable) -> void:
 	if btn == null:
 		return
-	btn.pressed.connect(pressed_cb)
+	btn.pressed.connect(func() -> void:
+		if GameAudio:
+			GameAudio.play_menu_click()
+		pressed_cb.call()
+	)
 	btn.mouse_entered.connect(_on_menu_button_hover_in.bind(btn))
 	btn.mouse_exited.connect(_on_menu_button_hover_out.bind(btn))
 

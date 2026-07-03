@@ -19,7 +19,7 @@ func _ready() -> void:
 	call_deferred("start_if_needed")
 
 
-func _on_scene_changed(_scene: Node) -> void:
+func _on_scene_changed() -> void:
 	call_deferred("ensure_playing")
 
 

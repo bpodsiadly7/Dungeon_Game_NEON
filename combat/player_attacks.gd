@@ -76,6 +76,7 @@ func attack_round_with_roll(
 	text += "You roll %d vs Armor %d → %s for %d dmg.\n" % [
 		roll, enemy_armor, "CRIT" if crit else ("HALF" if roll == enemy_armor else "HIT"), dmg
 	]
+	_g.notify_player_hit_enemy(crit, roll == enemy_armor)
 
 	if crit and _g.bloodlust_lifesteal > 0.0 and _g.player.is_alive():
 		var heal = maxi(1, int(round(dmg * _g.bloodlust_lifesteal)))
@@ -157,6 +158,6 @@ func execute_attack(mode: int) -> void:
 		_g.lbl_log.text = desc
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false
