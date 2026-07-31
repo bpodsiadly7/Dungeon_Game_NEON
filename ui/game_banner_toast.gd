@@ -62,30 +62,18 @@ static func _present(parent: Node, entry: Dictionary) -> void:
 	var duration := float(entry.get("duration", 2.2))
 	var font: Font = entry.get("font", null) as Font
 
-	# Ten sam układ co inventory/menu: ozdobna ramka + ciemne wypełnienie.
+	# Jeden zwarty panel fantasy (panel-015) — bez osobnej transparentnej ramki.
+	# Duży 9-slice (32px) na małym banerze „zjadał” środkowe krawędzie.
 	var shell := PanelContainer.new()
 	shell.name = BANNER_NAME
 	shell.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	shell.z_index = 450
-	shell.add_theme_stylebox_override("panel", _banner_border(accent))
-
-	var fill := PanelContainer.new()
-	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	fill.add_theme_stylebox_override("panel", _banner_fill())
-	shell.add_child(fill)
-
-	var pad := MarginContainer.new()
-	pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pad.add_theme_constant_override("margin_left", 4)
-	pad.add_theme_constant_override("margin_right", 4)
-	pad.add_theme_constant_override("margin_top", 2)
-	pad.add_theme_constant_override("margin_bottom", 2)
-	fill.add_child(pad)
+	shell.add_theme_stylebox_override("panel", _banner_panel(accent))
 
 	var root := VBoxContainer.new()
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_theme_constant_override("separation", 4)
-	pad.add_child(root)
+	shell.add_child(root)
 
 	if title != "":
 		var hdr := Label.new()
@@ -141,7 +129,7 @@ static func _present(parent: Node, entry: Dictionary) -> void:
 	await parent.get_tree().process_frame
 	if not is_instance_valid(shell):
 		return
-	var h := maxf(shell.get_combined_minimum_size().y, 88.0)
+	var h := maxf(shell.get_combined_minimum_size().y, 100.0)
 	shell.offset_bottom = shell.offset_top + h
 
 	var start_y := shell.offset_top
@@ -171,24 +159,19 @@ static func _clear_existing(parent: Node) -> void:
 			child.queue_free()
 
 
-static func _banner_border(accent: Color) -> StyleBoxTexture:
-	var sb := FantasyUiAssets.shell_border()
-	# Lekkie zabarwienie ramki kolorem rarity / accent (jak sloty w inventory).
-	var frame := FantasyUiAssets.TINT_FRAME
-	sb.modulate_color = Color(
-		lerpf(frame.r, accent.r, 0.35),
-		lerpf(frame.g, accent.g, 0.35),
-		lerpf(frame.b, accent.b, 0.35),
+static func _banner_panel(accent: Color) -> StyleBoxTexture:
+	# Mniejszy patch niż okno inventory — baner jest niski, 32px łamało środek krawędzi.
+	var patch := FantasyUiAssets.PATCH_SLOT
+	var fill := FantasyUiAssets.TINT_FILL_DARK
+	var tint := Color(
+		lerpf(fill.r, accent.r, 0.12),
+		lerpf(fill.g, accent.g, 0.12),
+		lerpf(fill.b, accent.b, 0.12),
 		1.0
 	)
-	return sb
-
-
-static func _banner_fill() -> StyleBoxTexture:
-	var sb := FantasyUiAssets.shell_fill()
-	# Trochę ciaśniej niż pełne okno inventory — baner ma być kompaktowy.
+	var sb := FantasyUiAssets.stylebox("Panel/panel-015.png", tint, patch, true, 16)
 	sb.content_margin_left = 22
 	sb.content_margin_right = 22
-	sb.content_margin_top = 14
-	sb.content_margin_bottom = 14
+	sb.content_margin_top = 16
+	sb.content_margin_bottom = 16
 	return sb
