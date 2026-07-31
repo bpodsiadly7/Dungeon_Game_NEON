@@ -3,8 +3,8 @@ class_name StatusEffects
 
 const _WorldMarker := preload("res://combat/status_world_marker.gd")
 
-## Odstęp ikony nad górną krawędzią bounding boxa tekstury.
-const STATUS_ICON_GAP_ABOVE_HEAD := 60
+## Odstęp ikony nad górną krawędzią bounding boxa tekstury (mniejsza = niżej).
+const STATUS_ICON_GAP_ABOVE_HEAD := 48
 ## Ikona nie może być wyżej niż ta odległość nad środkiem sprite'a (px na ekranie).
 const STATUS_ICON_MAX_RISE_ABOVE_CENTER := 250
 ## Kropelki startują tuż pod dolną krawędzią ikony statusu.

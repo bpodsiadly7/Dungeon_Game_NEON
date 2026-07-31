@@ -44,7 +44,7 @@ position = Vector2(3, 3)
 
 [node name="Player" type="Sprite2D" parent="."]
 position = Vector2(-336, 40)
-scale = Vector2(0.4, 0.4)
+scale = Vector2(0.35, 0.35)
 texture = ExtResource("2_7mycd")
 script = ExtResource("2_h2yge")
 
@@ -54,7 +54,7 @@ script = ExtResource("3_h2yge")
 
 [node name="Sprite2D" type="Sprite2D" parent="Enemy"]
 position = Vector2(36, -4)
-scale = Vector2(0.4, 0.4)
+scale = Vector2(0.35, 0.35)
 
 [node name="CanvasLayer" type="CanvasLayer" parent="."]
 

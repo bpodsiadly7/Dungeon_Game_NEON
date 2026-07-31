@@ -26,6 +26,7 @@ const _ATTACK_SLOT_HIGHLIGHT_SHADER := preload("res://ui/attack_slot_highlight.g
 const _FLOATING_DAMAGE_NUMBERS := preload("res://ui/floating_damage_numbers.gd")
 const _NEAR_DEATH_WARNING_SCRIPT := preload("res://ui/near_death_warning.gd")
 const _ENEMY_DEATH_ICON_FX := preload("res://ui/enemy_death_icon_fx.gd")
+const _GAME_BANNER_TOAST := preload("res://ui/game_banner_toast.gd")
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_BASIC := Color(0.88, 0.94, 1.0, 1.0)
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_SAFE := Color(0.78, 1.0, 0.86, 1.0)
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_WILD := Color(1.0, 0.78, 0.72, 1.0)
@@ -102,6 +103,12 @@ var _chest_reward_handled: bool = false
 var _game_pause_depth: int = 0
 var _inventory_pause_active: bool = false
 var _last_shake_sfx_ms: int = 0
+var _level_banner_ready: bool = false
+var _level_banner_seen: int = 0
+var _level_banner_pending: int = 0
+var _level_banner_queued: bool = false
+## W jednym otwarciu inventory zmiana broni kończy turę najwyżej raz.
+var _weapon_swap_turn_spent_this_inventory: bool = false
 
 var _dice: DicePlayback
 var _player_attacks: PlayerAttacks
@@ -628,6 +635,9 @@ func _ready() -> void:
 	if player.level >= EVOLVE_LEVEL:
 		_request_evolution_choice()
 
+	_level_banner_seen = player.level
+	_level_banner_ready = true
+
 	# Inventory + UI
 	_load_permanent_items_into_inventory()
 	_sync_player_max_hp_from_gear()
@@ -817,6 +827,7 @@ func open_inventory() -> void:
 	if resolving_turn:
 		return
 	if inventory_screen:
+		_weapon_swap_turn_spent_this_inventory = false
 		inventory_screen.open(inventory, _inventory_ui_equipped(), _inventory_ui_stats())
 		_set_inventory_paused(true)
 		if _status_effects:
@@ -1469,7 +1480,6 @@ func _apply_treasure_chest_reward(reward: Dictionary) -> void:
 				str(item.get("name", "???")),
 				_rarity_name(int(item.get("rarity", Rarity.COMMON)))
 			]
-		show_damage_popup(player, str(item.get("name", "???")), "heal")
 		_sync_inventory_screen_if_open()
 		if not ref.is_empty():
 			_show_loot_toast(item)
@@ -2144,6 +2154,34 @@ func _on_player_level_changed(level: int, stat_points_now: int) -> void:
 	# Do not auto-open stats panel on level up.
 	# Player spends points from Inventory; we only nudge via the unspent indicator.
 	_update_unspent_points_indicator(stat_points_now)
+	_queue_level_up_banner(level)
+
+
+func _queue_level_up_banner(level: int) -> void:
+	if not _level_banner_ready:
+		return
+	if level <= _level_banner_seen:
+		return
+	_level_banner_pending = level
+	if _level_banner_queued:
+		return
+	_level_banner_queued = true
+	call_deferred("_flush_level_up_banner")
+
+
+func _flush_level_up_banner() -> void:
+	_level_banner_queued = false
+	if not _level_banner_ready:
+		return
+	if _level_banner_pending <= _level_banner_seen:
+		return
+	var gained := _level_banner_pending - _level_banner_seen
+	_level_banner_seen = _level_banner_pending
+	var parent := _ui_root()
+	var title := "LEVEL UP" if gained == 1 else "LEVEL UP  ×%d" % gained
+	var body := "You are now level %d" % _level_banner_seen
+	var sub := "+%d Stat Points" % (gained * 3)
+	_GAME_BANNER_TOAST.show(parent, title, body, sub, Color(0.95, 0.82, 0.30, 1.0), 2.4, DMG_FONT)
 
 func _cache_default_dice_set() -> void:
 	_dice.cache_default_dice_set()
@@ -3268,6 +3306,15 @@ func _consume_weapon_equip_turn() -> void:
 		return
 	if bool(current_enemy_data.get("treasure", false)):
 		return
+	# Jedna sesja inventory = maksymalnie jedno zakończenie tury za swap broni.
+	if inventory_screen and inventory_screen.visible:
+		if _weapon_swap_turn_spent_this_inventory:
+			if lbl_log:
+				lbl_log.text = "Weapon swapped (turn already ended this inventory)."
+			return
+		_weapon_swap_turn_spent_this_inventory = true
+	resolving_turn = true
+	_set_attack_buttons_disabled(true)
 	if lbl_log:
 		lbl_log.text = "You swap weapons — your turn ends."
 	await set_turn(Turn.ENEMY)
@@ -3467,56 +3514,20 @@ func _add_item_to_inventory(it:Dictionary) -> Dictionary:
 	return ref
 
 func _show_loot_toast(item: Dictionary) -> void:
-	if not $CanvasLayer:
-		return
-	var rar:int = int(item.get("rarity", Rarity.COMMON))
+	var rar: int = int(item.get("rarity", Rarity.COMMON))
+	var item_name := String(item.get("name", "???"))
+	var body := "%s  ·  %s" % [item_name, _rarity_name(rar)]
+	var sub := _item_banner_subtitle(item)
+	var accent: Color = RARITY_COLORS.get(rar, UI_COL["accent"])
+	_GAME_BANNER_TOAST.show(_ui_root(), "ITEM FOUND", body, sub, accent, 2.4, DMG_FONT)
 
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(520, 120)
-	panel.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	panel.offset_left = 60
-	panel.offset_right = -60
-	panel.offset_top = 60
-	panel.offset_bottom = 180
-	panel.z_index = 450
-	$CanvasLayer.add_child(panel)
 
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 6)
-	panel.add_child(root)
-
-	var hdr := Label.new()
-	hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hdr.text = "ITEM FOUND"
-	hdr.add_theme_font_size_override("font_size", 18)
-	hdr.modulate = UI_COL["accent"]
-	if DMG_FONT: hdr.add_theme_font_override("font", DMG_FONT)
-	root.add_child(hdr)
-
-	var name := Label.new()
-	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name.text = "%s  (%s)" % [String(item.get("name","???")), _rarity_name(rar)]
-	name.add_theme_font_size_override("font_size", 20)
-	name.modulate = RARITY_COLORS.get(rar, Color.WHITE)
-	if DMG_FONT: name.add_theme_font_override("font", DMG_FONT)
-	root.add_child(name)
-
-	var stats := Label.new()
-	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	stats.text = _inventory_item_line(item)
-	root.add_child(stats)
-
-	panel.modulate.a = 0.0
-	panel.position.y -= 10
-	var tw := get_tree().create_tween()
-	tw.tween_property(panel, "modulate:a", 1.0, 0.16).from(0.0)
-	tw.parallel().tween_property(panel, "position:y", panel.position.y + 10, 0.16)
-	tw.tween_interval(1.8)
-	tw.tween_property(panel, "modulate:a", 0.0, 0.18)
-	tw.finished.connect(func():
-		if is_instance_valid(panel):
-			panel.queue_free()
-	)
+func _item_banner_subtitle(item: Dictionary) -> String:
+	var line := _inventory_item_line(item)
+	var item_name := str(item.get("name", "???"))
+	if line.begins_with(item_name):
+		line = line.substr(item_name.length()).strip_edges()
+	return line
 
 
 func _roll_enemy_loot_drop(enemy_data: Dictionary) -> void:
@@ -3551,14 +3562,12 @@ func _roll_enemy_loot_drop(enemy_data: Dictionary) -> void:
 	var item := _gen_random_item(slot_key, rarity, diff)
 	var ref := _add_item_to_inventory(item)
 
-	# log + zielony popup tekstowy (jak było) + NOWE okienko
+	# log + jeden baner loot (bez floating damage — to dublowało napisy)
 	if lbl_log:
 		lbl_log.text = "Loot: %s (%s)" % [str(item.get("name","???")), _rarity_name(int(item.get("rarity", Rarity.COMMON)))]
-	show_damage_popup(player, str(item.get("name","???")), "heal")
 
 	_sync_inventory_screen_if_open()
 
-	# popup z przyciskiem "Equip now"
 	if not ref.is_empty():
 		_show_loot_toast(item)
 
@@ -4714,56 +4723,7 @@ func _ui_root() -> Node:
 
 
 func _show_toast(msg: String, duration: float = 1.5) -> void:
-	var parent := _ui_root()
-
-	var panel := PanelContainer.new()
-	panel.name = "ToastPanel"
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0, 0, 0, 0.75)
-	sb.border_color = Color(1, 1, 1, 0.20)
-	sb.border_width_left = 1
-	sb.border_width_right = 1
-	sb.border_width_top = 1
-	sb.border_width_bottom = 1
-	sb.corner_radius_top_left = 8
-	sb.corner_radius_top_right = 8
-	sb.corner_radius_bottom_left = 8
-	sb.corner_radius_bottom_right = 8
-	panel.add_theme_stylebox_override("panel", sb)
-	panel.z_index = 100
-
-	var pad := MarginContainer.new()
-	pad.add_theme_constant_override("margin_left", 16)
-	pad.add_theme_constant_override("margin_right", 16)
-	pad.add_theme_constant_override("margin_top", 10)
-	pad.add_theme_constant_override("margin_bottom", 10)
-
-	var lbl := Label.new()
-	lbl.text = msg
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_font_size_override("font_size", 18)
-	pad.add_child(lbl)
-	panel.add_child(pad)
-
-	# wycentruj – lekko nad środkiem
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.anchor_top = 0.35
-	panel.anchor_bottom = 0.35
-	panel.offset_left = -220
-	panel.offset_right = 220
-	panel.offset_top = -26
-	panel.offset_bottom = 26
-	panel.modulate = Color(1,1,1,0)
-
-	parent.add_child(panel)
-
-	var t := create_tween()
-	t.tween_property(panel, "modulate:a", 1.0, 0.15)
-	t.tween_interval(duration)
-	t.tween_property(panel, "modulate:a", 0.0, 0.25)
-	t.tween_callback(Callable(panel, "queue_free"))
+	_GAME_BANNER_TOAST.show(_ui_root(), "", msg, "", UI_COL["accent"], duration, DMG_FONT)
 
 func _go_to_home_test() -> void:
 	# opcjonalnie: szybkie potwierdzenie w konsoli
@@ -5011,7 +4971,6 @@ func _dev_add_level() -> void:
 func _dev_add_levels(count: int) -> void:
 	for i in range(count):
 		player.add_xp(player.xp_to_next - player.xp)
-	_show_toast("+%d level(s)! Now LVL %d" % [count, player.level], 1.5)
 
 func _dev_set_forced_rarity(r: int, btn: Button) -> void:
 	_dev_forced_rarity = r
