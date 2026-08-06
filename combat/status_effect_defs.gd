@@ -46,9 +46,9 @@ const BLEED := {
 	"enemy_proc_chance": 0.22,
 }
 
-## DEV — tymczasowe 100% bleed do testów (usuń po zakończeniu testów).
-const DEV_FORCE_BLEED_WEAPON_NAMES: Array[String] = ["rusty sword"]
-const DEV_FORCE_BLEED_ENEMY_NAMES: Array[String] = ["goblin knife"]
+## DEV — zostawione puste; włącz tylko do lokalnych testów proców.
+const DEV_FORCE_BLEED_WEAPON_NAMES: Array[String] = []
+const DEV_FORCE_BLEED_ENEMY_NAMES: Array[String] = []
 
 
 static func bleed_weapon_form(form: String) -> bool:
@@ -74,9 +74,6 @@ static func bleed_base_proc_chance_for_item(item: Dictionary) -> float:
 
 
 static func bleed_proc_chance_for_weapon(weapon: Dictionary, crit: bool, glancing: bool) -> float:
-	var weapon_name := String(weapon.get("name", "")).to_lower()
-	if weapon_name in DEV_FORCE_BLEED_WEAPON_NAMES:
-		return 1.0
 	var rarity := clampi(int(weapon.get("rarity", 0)), 0, 4)
 	var chance := float(BLEED_PROC_BY_RARITY.get(rarity, BLEED_PROC_BY_RARITY[0]))
 	if glancing:
@@ -87,9 +84,6 @@ static func bleed_proc_chance_for_weapon(weapon: Dictionary, crit: bool, glancin
 
 
 static func enemy_bleed_proc_chance(enemy_data: Dictionary) -> float:
-	var name_lower := String(enemy_data.get("name", "")).to_lower()
-	if name_lower in DEV_FORCE_BLEED_ENEMY_NAMES:
-		return 1.0
 	return float(BLEED.get("enemy_proc_chance", 0.22))
 
 

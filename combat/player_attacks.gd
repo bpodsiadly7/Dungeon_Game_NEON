@@ -109,8 +109,7 @@ func execute_attack(mode: int) -> void:
 
 	if bool(_g.current_enemy_data.get("treasure", false)):
 		_g.resolving_turn = true
-		if _g.lbl_log:
-			_g.lbl_log.text = "You open the chest..."
+		_g.combat_log("You open the chest...")
 		var reward: Dictionary = _g._roll_treasure_chest_reward()
 		await _g._run_chest_minigame(reward)
 		_g._apply_treasure_chest_reward(reward)
@@ -154,8 +153,7 @@ func execute_attack(mode: int) -> void:
 				d10_roll, int(round((wild_mult - 1.0) * 100.0))
 			]
 
-	if _g.lbl_log:
-		_g.lbl_log.text = desc
+	_g.combat_log(desc)
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
 		await _g.set_turn(_g.Turn.ENEMY)

@@ -113,8 +113,7 @@ func tick_turn_start_async(target: String) -> void:
 	_g.resolving_turn = true
 	_g._set_attack_buttons_disabled(true)
 	_g._update_potions_ui()
-	if _g.lbl_log:
-		_g.lbl_log.text = "%s is bleeding..." % who
+	_g.combat_log("%s is bleeding..." % who)
 
 	await BleedTickVfx.play(_marker_layer, _bleed_vfx_origin(target_node, target == "player"))
 
@@ -129,8 +128,7 @@ func tick_turn_start_async(target: String) -> void:
 	if int(bleed["turns_left"]) <= 0:
 		_remove_effect(target, StatusEffectDefs.ID_BLEED)
 
-	if _g.lbl_log:
-		_g.lbl_log.text = "%s bleeds for %d." % [who, dmg]
+	_g.combat_log("%s bleeds for %d." % [who, dmg])
 
 	await _g.get_tree().create_timer(0.45).timeout
 	_refresh_ui()

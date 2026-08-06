@@ -34,8 +34,7 @@ func use(slot: int) -> void:
 		"crossbow":
 			await overdraw(slot)
 		_:
-			if _g.lbl_log:
-				_g.lbl_log.text = "Unknown weapon skill."
+			_g.combat_log("Unknown weapon skill.")
 			_g.resolving_turn = false
 
 
@@ -54,8 +53,7 @@ func riposte(slot: int) -> void:
 	if guard_roll == 6:
 		_g.enemy_armor_penalty = 1
 		log += "Enemy Armor −1 on your next hit.\n"
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot)
 
 
@@ -79,8 +77,7 @@ func skull_cleave(slot: int) -> void:
 		_g.show_damage_popup(_g.enemy, str(dmg), "hit")
 		_g.notify_player_hit_enemy(false, true)
 		log += "Glancing blow for %d dmg (45%%).\n" % dmg
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot)
 
 
@@ -95,8 +92,7 @@ func needle_flurry(slot: int) -> void:
 	log += _g._player_attacks.attack_round_with_roll(r1, 0.55, CombatDefs.SAFE_ATTACK_CRIT)
 	if _g.enemy.is_alive():
 		log += _g._player_attacks.attack_round_with_roll(r2, 0.55, CombatDefs.SAFE_ATTACK_CRIT)
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot)
 
 
@@ -107,8 +103,7 @@ func shatter_guard(slot: int) -> void:
 	var ignore: int = int(ceil(float(crush) / 2.0))
 	var log := "Shatter Guard: d20=%d, d6=%d (ignore %d Armor).\n" % [roll, crush, ignore]
 	log += _g._player_attacks.attack_round_with_roll(roll, 1.10, _g.CRIT, ignore)
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot)
 
 
@@ -117,8 +112,7 @@ func lunge(slot: int) -> void:
 	await _g._dice.play_roll_animation([_g._player_attacks.d10_face_value(roll)], ["D10"])
 	var log := "Lunge: d10=%d (Armor−3).\n" % roll
 	log += _g._player_attacks.attack_round_with_roll(roll, 1.25, CombatDefs.SAFE_ATTACK_CRIT, 3)
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot)
 
 
@@ -150,8 +144,7 @@ func earthshaker(slot: int) -> void:
 		_g.show_damage_popup(_g.enemy, str(dmg), "hit")
 		_g.notify_player_hit_enemy(false, true)
 		log += "Shockwave for %d dmg (55%%).\n" % dmg
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot, CombatDefs.WEAPON_SKILL_CD_LONG)
 
 
@@ -166,8 +159,7 @@ func flowing_cut(slot: int) -> void:
 		var roll2: int = randi_range(1, 20)
 		await _g._dice.play_roll_animation([roll2], ["D20"])
 		log += _g._player_attacks.attack_round_with_roll(roll2, 0.5, _g.CRIT, 0, false)
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot)
 
 
@@ -178,8 +170,7 @@ func duelist_gambit(slot: int) -> void:
 	var roll: int = maxi(r1, r2)
 	var log := "Duelist's Gambit: d20 %d & %d → use %d.\n" % [r1, r2, roll]
 	log += _g._player_attacks.attack_round_with_roll(roll, 1.0, _g.CRIT, 0, true, 19)
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot)
 
 
@@ -188,8 +179,7 @@ func aimed_shot(slot: int) -> void:
 	await _g._dice.play_roll_animation([_g._player_attacks.d10_face_value(roll)], ["D10"])
 	var log := "Aimed Shot: d10=%d (Armor−2).\n" % roll
 	log += _g._player_attacks.attack_round_with_roll(roll, 1.20, CombatDefs.SAFE_ATTACK_CRIT, 2)
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot, CombatDefs.WEAPON_SKILL_CD_BOW)
 
 
@@ -212,6 +202,5 @@ func overdraw(slot: int) -> void:
 		_g.show_damage_popup(_g.enemy, str(bonus_dmg), "hit")
 		_g.notify_player_hit_enemy(d20_roll == _g.CRIT, false)
 		log += "Overdraw burst +%d dmg.\n" % bonus_dmg
-	if _g.lbl_log:
-		_g.lbl_log.text = log
+	_g.combat_log(log)
 	await _g._skill_runtime.finish_active_skill_turn(slot, CombatDefs.WEAPON_SKILL_CD_LONG)

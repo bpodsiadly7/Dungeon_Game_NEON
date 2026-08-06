@@ -109,6 +109,9 @@ var _level_banner_pending: int = 0
 var _level_banner_queued: bool = false
 ## W jednym otwarciu inventory zmiana broni kończy turę najwyżej raz.
 var _weapon_swap_turn_spent_this_inventory: bool = false
+const COMBAT_LOG_MAX_LINES := 4
+var _combat_log_lines: Array[String] = []
+var _combat_tips_armed: bool = false
 
 var _dice: DicePlayback
 var _player_attacks: PlayerAttacks
@@ -747,8 +750,90 @@ func _ready() -> void:
 
 	# ... koniec _ready() 
 	print("[DEBUG] _ready() END")
+	_setup_combat_log_ui()
 	_ensure_unspent_points_label()
 	_update_unspent_points_indicator(player.stat_points)
+	_combat_tips_armed = true
+	_maybe_show_combat_tips()
+
+
+func combat_log(msg: String) -> void:
+	var line := String(msg).strip_edges()
+	if line == "":
+		return
+	# Jedna wiadomość może mieć kilka linii (np. opis ataku) — bierzemy pierwszą jako nagłówek logu.
+	var first := line.split("\n")[0].strip_edges()
+	if first == "":
+		first = line
+	_combat_log_lines.append(first)
+	while _combat_log_lines.size() > COMBAT_LOG_MAX_LINES:
+		_combat_log_lines.pop_front()
+	if lbl_log == null:
+		return
+	lbl_log.visible = true
+	lbl_log.text = "\n".join(_combat_log_lines)
+
+
+func _setup_combat_log_ui() -> void:
+	if lbl_log == null:
+		return
+	lbl_log.visible = true
+	lbl_log.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl_log.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	lbl_log.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	lbl_log.custom_minimum_size = Vector2(420, 78)
+	lbl_log.add_theme_font_size_override("font_size", 15)
+	lbl_log.add_theme_color_override("font_color", Color(0.90, 0.86, 0.78, 0.95))
+	lbl_log.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.03, 0.9))
+	lbl_log.add_theme_constant_override("outline_size", 3)
+	if DMG_FONT:
+		lbl_log.add_theme_font_override("font", DMG_FONT)
+	if _combat_log_lines.is_empty():
+		combat_log("Ready for battle.")
+
+
+func _combat_tips_done() -> bool:
+	return bool(GameState.meta.get("combat_tips_done", false))
+
+
+func _mark_combat_tips_done() -> void:
+	GameState.meta["combat_tips_done"] = true
+	GameState.save(GameState.current_slot)
+
+
+func _maybe_show_combat_tips() -> void:
+	if not _combat_tips_armed or _combat_tips_done():
+		return
+	_mark_combat_tips_done()
+	var parent := _ui_root()
+	var tip_accent := Color(0.78, 0.86, 0.95, 1.0)
+	_GAME_BANNER_TOAST.show(
+		parent,
+		"TIP  ·  ATTACKS",
+		"Basic · Safe · Wild",
+		"Basic = standard hit. Safe adds Armor. Wild hits harder but lowers Armor.",
+		tip_accent,
+		3.0,
+		DMG_FONT
+	)
+	_GAME_BANNER_TOAST.show(
+		parent,
+		"TIP  ·  ARMOR",
+		"Roll d20 vs Armor",
+		"Higher Armor makes hits weaker. Crits ignore Armor. Misses deal no damage.",
+		tip_accent,
+		3.0,
+		DMG_FONT
+	)
+	_GAME_BANNER_TOAST.show(
+		parent,
+		"TIP  ·  SKILLS",
+		"Keys 1 and 2",
+		"Weapon and class skills have cooldowns. Watch the skill bar under your attacks.",
+		tip_accent,
+		3.0,
+		DMG_FONT
+	)
 
 
 func _init_combat_modules() -> void:
@@ -976,14 +1061,13 @@ func set_turn(t: Turn) -> void:
 		_set_attack_buttons_disabled(_is_evolution_choice_open())
 		resolving_turn = false
 		_update_potions_ui()
-		if lbl_log:
-			lbl_log.text = "Your turn. Choose an attack."
+		combat_log("Your turn. Choose an attack.")
+		_maybe_show_combat_tips()
 	else:
 		if _status_effects:
 			await _status_effects.tick_turn_start_async("enemy")
 		resolving_turn = false
-		if lbl_log:
-			lbl_log.text = "Enemy is thinking..."
+		combat_log("Enemy is thinking...")
 		if _is_evolution_choice_open():
 			_update_potions_ui()
 			return
@@ -1010,7 +1094,7 @@ func _enemy_take_turn() -> void:
 	if turn != Turn.ENEMY or not enemy.is_alive() or not player.is_alive(): return
 	resolving_turn = true
 	var desc: String = await _enemy_attack_round_async()
-	if lbl_log: lbl_log.text = desc
+	combat_log(desc)
 	await get_tree().create_timer(0.1).timeout
 	if player.is_alive():
 		await set_turn(Turn.PLAYER)
@@ -1143,11 +1227,9 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 
 
 	if data.get("treasure", false):
-		if lbl_log:
-			lbl_log.text = "A mysterious chest appears! Press Attack to open it."
+		combat_log("A mysterious chest appears! Press Attack to open it.")
 	else:
-		if lbl_log:
-			lbl_log.text = "A wild %s appears!" % data["name"]
+		combat_log("A wild %s appears!" % data["name"])
 		if _is_current_boss(name):
 			var audio := get_node_or_null("/root/GameAudio")
 			if audio:
@@ -1475,11 +1557,10 @@ func _apply_treasure_chest_reward(reward: Dictionary) -> void:
 	if reward.get("kind") == "item":
 		var item: Dictionary = reward.get("item", {})
 		var ref := _add_item_to_inventory(item)
-		if lbl_log:
-			lbl_log.text = "Treasure: %s (%s)" % [
-				str(item.get("name", "???")),
-				_rarity_name(int(item.get("rarity", Rarity.COMMON)))
-			]
+		combat_log("Treasure: %s (%s)" % [
+			str(item.get("name", "???")),
+			_rarity_name(int(item.get("rarity", Rarity.COMMON)))
+		])
 		_sync_inventory_screen_if_open()
 		if not ref.is_empty():
 			_show_loot_toast(item)
@@ -1492,8 +1573,7 @@ func _apply_treasure_chest_reward(reward: Dictionary) -> void:
 			if GameAudio:
 				GameAudio.play_potion_pickup()
 		show_damage_popup(player, "FULL HEAL", "heal")
-		if lbl_log:
-			lbl_log.text = "Treasure: fully healed and potions refilled!"
+		combat_log("Treasure: fully healed and potions refilled!")
 
 
 func _run_chest_minigame(reward: Dictionary) -> void:
@@ -1514,8 +1594,7 @@ func _apply_player_damage(dmg:int, kind:String = "hit") -> void:
 	if shield_active:
 		shield_active = false
 		show_damage_popup(player, "BLOCK", "heal")
-		if lbl_log:
-			lbl_log.text = "Your shield blocks the entire hit!"
+		combat_log("Your shield blocks the entire hit!")
 		return
 
 	var original:int = clamp(dmg, 0, 99999)
@@ -1690,8 +1769,7 @@ func _on_enemy_defeated() -> void:
 	else:
 		push_warning("last_enemy snapshot empty; using fallback XP=%d" % gained_xp)
 	player.add_xp(gained_xp)
-	if lbl_log:
-		lbl_log.text = "Enemy defeated! +%d XP" % gained_xp
+	combat_log("Enemy defeated! +%d XP" % gained_xp)
 	_try_drop_potion()
 		# PRÓBA DROPu ITEMU
 	_roll_enemy_loot_drop(last_enemy)
@@ -1889,7 +1967,7 @@ func _on_player_died() -> void:
 		lbl_player_dmg_value.text = "0"
 	if lbl_player_armor_value:
 		lbl_player_armor_value.text = str(_calc_player_armor_total())
-	lbl_log.text = "Game Over."
+	combat_log("Game Over.")
 	if btn_attack:
 		btn_attack.disabled = true
  
@@ -2260,8 +2338,7 @@ func _switch_to_dungeon(idx:int) -> void:
 		visited_dungeons.append(idx)
 		GameState.meta["visited_dungeons"] = visited_dungeons.duplicate()
 
-	if lbl_log:
-		lbl_log.text = "Entering: %s" % String(DUNGEONS[idx]["name"])
+	combat_log("Entering: %s" % String(DUNGEONS[idx]["name"]))
 	
 	if lbl_dungeon_name:
 		lbl_dungeon_name.text = "Current dungeon: %s" % String(DUNGEONS[current_dungeon_index]["name"])
@@ -2452,8 +2529,7 @@ func _try_drop_potion() -> void:
 		_update_potions_ui()
 		if GameAudio:
 			GameAudio.play_potion_pickup()
-		if lbl_log:
-			lbl_log.text = "You found a Health Potion! (%d/%d)" % [potions, POTION_MAX]
+		combat_log("You found a Health Potion! (%d/%d)" % [potions, POTION_MAX])
 		show_damage_popup(player, "+Potion", "heal")
 
 func play_heal_flash() -> void:
@@ -2541,8 +2617,7 @@ func _switch_to_next_dungeon() -> void:
 		if not visited_dungeons.has(1):
 			visited_dungeons.append(1)
 
-		if lbl_log:
-			lbl_log.text = "Entering: Undead Crypt"
+		combat_log("Entering: Undead Crypt")
 
 		# zaktualizuj pasek „Current dungeon: …”
 		if lbl_dungeon_name:
@@ -2553,8 +2628,7 @@ func _switch_to_next_dungeon() -> void:
 		await set_turn(Turn.PLAYER)
 	else:
 		# dalej nie używamy tego przejścia — od D2 decyduje _offer_branch_choice_after_boss()
-		if lbl_log:
-			lbl_log.text = "No further dungeons via linear path. Stay here."
+		combat_log("No further dungeons via linear path. Stay here.")
 		_request_spawn(_pick_enemy())
 		await set_turn(Turn.PLAYER)
 
@@ -3060,8 +3134,7 @@ func _on_class_picked(class_key: String) -> void:
 
 	_apply_class_evolution(class_key)
 
-	if lbl_log:
-		lbl_log.text = "Evolution complete! You are now a " + class_key.capitalize() + "."
+	combat_log("Evolution complete! You are now a " + class_key.capitalize() + ".")
 
 	if not skills_hotbar_wired:
 		_create_skills_ui()
@@ -3086,8 +3159,7 @@ func _apply_class_evolution(key: String) -> void:
 
 	_dismiss_evolution_overlay()
 
-	if lbl_log:
-		lbl_log.text = "Evolution complete! You are now a " + key.capitalize() + "."
+	combat_log("Evolution complete! You are now a " + key.capitalize() + ".")
 	_animate_class_change(key)
 	_post_evolution_breath()
 
@@ -3309,14 +3381,12 @@ func _consume_weapon_equip_turn() -> void:
 	# Jedna sesja inventory = maksymalnie jedno zakończenie tury za swap broni.
 	if inventory_screen and inventory_screen.visible:
 		if _weapon_swap_turn_spent_this_inventory:
-			if lbl_log:
-				lbl_log.text = "Weapon swapped (turn already ended this inventory)."
+			combat_log("Weapon swapped (turn already ended this inventory).")
 			return
 		_weapon_swap_turn_spent_this_inventory = true
 	resolving_turn = true
 	_set_attack_buttons_disabled(true)
-	if lbl_log:
-		lbl_log.text = "You swap weapons — your turn ends."
+	combat_log("You swap weapons — your turn ends.")
 	await set_turn(Turn.ENEMY)
 	_tick_skill_cooldowns()
 
@@ -3563,8 +3633,7 @@ func _roll_enemy_loot_drop(enemy_data: Dictionary) -> void:
 	var ref := _add_item_to_inventory(item)
 
 	# log + jeden baner loot (bez floating damage — to dublowało napisy)
-	if lbl_log:
-		lbl_log.text = "Loot: %s (%s)" % [str(item.get("name","???")), _rarity_name(int(item.get("rarity", Rarity.COMMON)))]
+	combat_log("Loot: %s (%s)" % [str(item.get("name","???")), _rarity_name(int(item.get("rarity", Rarity.COMMON)))])
 
 	_sync_inventory_screen_if_open()
 
@@ -4155,8 +4224,7 @@ func _try_use_skill(slot:int) -> void:
 
 	var cd: int = int(skill_cooldowns.get(slot, 0))
 	if cd > 0:
-		if lbl_log:
-			lbl_log.text = "%s is on cooldown (%d turns)." % [String(skills[slot].get("name","Skill")), cd]
+		combat_log("%s is on cooldown (%d turns)." % [String(skills[slot].get("name","Skill")), cd])
 		return
 
 	var skey := String(skills[slot].get("key",""))
@@ -4174,8 +4242,7 @@ func _try_use_skill(slot:int) -> void:
 		"weapon_skill":
 			await _use_weapon_skill(slot)
 		_:
-			if lbl_log:
-				lbl_log.text = "Skill not implemented yet."
+			combat_log("Skill not implemented yet.")
 
 	_update_skills_ui()
 
@@ -4956,8 +5023,7 @@ func _dev_run_enemy_crit_attack() -> void:
 	if btn_attack:
 		btn_attack.disabled = true
 	var desc: String = await _enemy_attack_round_async(true)
-	if lbl_log:
-		lbl_log.text = desc
+	combat_log(desc)
 	await get_tree().create_timer(0.1).timeout
 	if player.is_alive():
 		await set_turn(Turn.PLAYER)
