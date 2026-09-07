@@ -314,12 +314,11 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="CombatLog" type="Label" parent="CanvasLayer/UIRoot/Bottom/HBoxContainer"]
-visible = true
 custom_minimum_size = Vector2(420, 78)
 layout_mode = 2
 size_flags_horizontal = 3
-autowrap_mode = 3
 vertical_alignment = 2
+autowrap_mode = 3
 
 [node name="PanelPotion" type="Control" parent="CanvasLayer/UIRoot"]
 layout_mode = 1

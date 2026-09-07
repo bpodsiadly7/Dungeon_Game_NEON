@@ -118,6 +118,15 @@ func execute_attack(mode: int) -> void:
 		_g.resolving_turn = false
 		return
 
+	if bool(_g.current_enemy_data.get("wood_wagon", false)):
+		_g.resolving_turn = true
+		_g.combat_log("Catch the falling wood!")
+		await _g._run_wood_wagon_encounter()
+		_g._wood_wagon_reward_handled = true
+		_g.enemy.take_damage(_g.enemy.hp)
+		_g.resolving_turn = false
+		return
+
 	_g.resolving_turn = true
 	var desc: String = ""
 

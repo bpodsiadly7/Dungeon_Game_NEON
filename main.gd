@@ -276,6 +276,13 @@ const TEX_HP_BOTTLE_2: Texture2D = preload("res://ikony/HpBottleIcon2.png")
 const TEX_HP_BOTTLE_3: Texture2D = preload("res://ikony/HpBottleIcon3.png")
 var potions:int = 0
 
+# --- Wood (run resource; later: building / crafting) ---
+var wood: int = 0
+var _wood_hud: Control
+var _wood_icon: TextureRect
+var _wood_count_lbl: Label
+var _tex_wood: Texture2D
+
 # --- LOOT / DROP ---
 # Szansa na drop jakiegokolwiek itemu vs. trudność przeciwnika
 const DROP_CHANCE_BY_DIFF := {
@@ -447,15 +454,18 @@ var _event_gap_counter: int = 0      # rośnie przy zwykłych wrogach, reset prz
 const TREASURE_EVENT_CHANCE := 0.10  # 10% szansy zamiast przeciwnika (zmień, jeśli chcesz)
 const TREASURE_TEX := "res://treasures/mystery_chest.png"  # opcjonalna grafika skrzyni
 
+## Wood wagon — ta sama bazowa szansa co chest (osobny roll po chest).
+## Po MIN_EVENT_INTERVAL: Shrine 10% → Chest 10% → Wagon 10% (kolejno).
+const WOOD_WAGON_EVENT_CHANCE := 0.10
+const WOOD_WAGON_TEX := "res://treasures/wooden_wagon.png"
+
 const SHRINE_CHANCE: float = 0.10  # TESTOWO (łatwo wywołać). Po teście zmień np. na 0.10.
 var _shrine_open: bool = false
 var _shrine_locked: bool = false
 var _shrine_in_progress: bool = false
 var shrine_cooldown: int = 0              # ile zwykłych walk jeszcze blokuje Shrine
 var _encounter_replaced_by_event: bool = false  # czy aktualny encounter to event (Shrine/Chest)
-
-
-
+var _wood_wagon_reward_handled: bool = false
 
 
 const TREASURE_CHEST_DATA := {
@@ -465,6 +475,15 @@ const TREASURE_CHEST_DATA := {
 	"difficulty": 5,   # żeby użyć tych samych wag jak boss (drop/rarity)
 	"treasure": true,
 	"tex": TREASURE_TEX
+}
+
+const WOOD_WAGON_DATA := {
+	"name": "Wood Wagon",
+	"hp": 50,
+	"damage": 0,
+	"difficulty": 1,
+	"wood_wagon": true,
+	"tex": WOOD_WAGON_TEX
 }
 
 
@@ -751,6 +770,7 @@ func _ready() -> void:
 	# ... koniec _ready() 
 	print("[DEBUG] _ready() END")
 	_setup_combat_log_ui()
+	_setup_wood_hud()
 	_ensure_unspent_points_label()
 	_update_unspent_points_indicator(player.stat_points)
 	_combat_tips_armed = true
@@ -1147,7 +1167,7 @@ func hitstop(time_sec: float = 0.07) -> void:
 	_pop_game_pause()
 
 func _pick_enemy() -> Dictionary:
-	# 1) Eventy (Shrine / Chest) tylko gdy minął odstęp
+	# 1) Eventy (Shrine / Chest / Wood Wagon) tylko gdy minął odstęp
 	if _event_gap_counter >= MIN_EVENT_INTERVAL:
 		# --- Sacred Shrine (EVENT) ---
 		if randf() < SHRINE_CHANCE:
@@ -1157,6 +1177,10 @@ func _pick_enemy() -> Dictionary:
 		if randf() < TREASURE_EVENT_CHANCE:
 			_event_gap_counter = 0
 			return TREASURE_CHEST_DATA.duplicate(true)
+		# --- Wood Wagon (EVENT) — ta sama bazowa szansa co chest ---
+		if randf() < WOOD_WAGON_EVENT_CHANCE:
+			_event_gap_counter = 0
+			return WOOD_WAGON_DATA.duplicate(true)
 
 	# 2) Budowa puli zwykłych przeciwników
 	var pool: Array[Dictionary] = []
@@ -1220,7 +1244,7 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 		current_enemy_data["damage"],
 		current_enemy_data.get("tex", ""),
 		int(current_enemy_data.get("difficulty", 1)),
-		bool(current_enemy_data.get("treasure", false))
+		_is_noncombat_encounter(current_enemy_data)
 	)
 	_update_labels()
 	_update_near_death_warning()
@@ -1228,6 +1252,8 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 
 	if data.get("treasure", false):
 		combat_log("A mysterious chest appears! Press Attack to open it.")
+	elif data.get("wood_wagon", false):
+		combat_log("A wood wagon stands here! Press Attack to catch falling wood.")
 	else:
 		combat_log("A wild %s appears!" % data["name"])
 		if _is_current_boss(name):
@@ -1235,6 +1261,15 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 			if audio:
 				audio.play_boss_announce()
 
+
+func _is_noncombat_encounter(data: Dictionary = {}) -> bool:
+	var d: Dictionary = data if not data.is_empty() else current_enemy_data
+	return bool(d.get("treasure", false)) or bool(d.get("wood_wagon", false))
+
+
+func _is_wood_wagon_encounter(data: Dictionary = {}) -> bool:
+	var d: Dictionary = data if not data.is_empty() else current_enemy_data
+	return bool(d.get("wood_wagon", false))
 
 
 func _prepare_next_enemy_with_popup() -> void:
@@ -1474,6 +1509,8 @@ func _enemy_attack_round_async(force_crit: bool = false) -> String:
 		return ""
 	if bool(current_enemy_data.get("treasure", false)):
 		return "The chest does nothing..."
+	if _is_wood_wagon_encounter():
+		return "The wood wagon does nothing..."
 
 	var roll: int = CRIT if force_crit else randi_range(1, 20)
 	var player_armor: int = _calc_player_armor_total()
@@ -1586,6 +1623,28 @@ func _run_chest_minigame(reward: Dictionary) -> void:
 	if is_instance_valid(mg):
 		mg.queue_free()
 
+
+func _apply_wood_wagon_reward(amount: int) -> void:
+	var gained := maxi(0, amount)
+	if gained <= 0:
+		combat_log("You gather no wood from the wagon.")
+		return
+	add_wood(gained)
+	combat_log("You gather %d wood from the wagon." % gained)
+	show_damage_popup(player, "+%d Wood" % gained, "xp")
+
+
+func _run_wood_wagon_encounter() -> void:
+	var layer := $CanvasLayer
+	if layer == null:
+		_apply_wood_wagon_reward(0)
+		return
+	var mg := WoodWagonMinigame.new()
+	layer.add_child(mg)
+	var caught: int = await mg.run()
+	_apply_wood_wagon_reward(caught)
+	if is_instance_valid(mg):
+		mg.queue_free()
 
 
 # Wspólna aplikacja obrażeń na gracza
@@ -1757,6 +1816,11 @@ func _on_enemy_defeated() -> void:
 		await _transition_to_next_enemy()
 		await set_turn(Turn.PLAYER)
 		return
+	if bool(last_enemy.get("wood_wagon", false)):
+		_wood_wagon_reward_handled = false
+		await _transition_to_next_enemy()
+		await set_turn(Turn.PLAYER)
+		return
 	var gained_xp := 15
 	var killed_name := "???"
 	if not last_enemy.is_empty():
@@ -1769,6 +1833,7 @@ func _on_enemy_defeated() -> void:
 	else:
 		push_warning("last_enemy snapshot empty; using fallback XP=%d" % gained_xp)
 	player.add_xp(gained_xp)
+	show_damage_popup(player, "+%d XP" % gained_xp, "xp")
 	combat_log("Enemy defeated! +%d XP" % gained_xp)
 	_try_drop_potion()
 		# PRÓBA DROPu ITEMU
@@ -2194,7 +2259,7 @@ func _worst_enemy_hit_damage() -> int:
 func _should_show_near_death_warning() -> bool:
 	if is_in_home or not player.is_alive() or not enemy.is_alive():
 		return false
-	if bool(current_enemy_data.get("treasure", false)):
+	if _is_noncombat_encounter():
 		return false
 	if inventory_screen != null and inventory_screen.visible:
 		return false
@@ -2440,6 +2505,83 @@ func _update_unspent_points_indicator(points: int) -> void:
 		_unspent_pulse_tween.parallel().tween_property(unspent_points_label, "modulate:a", 1.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		_unspent_pulse_tween.tween_property(unspent_points_label, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		_unspent_pulse_tween.parallel().tween_property(unspent_points_label, "modulate:a", 0.75, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+# --- WOOD HUD ---
+func _wood_texture() -> Texture2D:
+	if _tex_wood != null:
+		return _tex_wood
+	var path := "res://resources/wood.png"
+	if ResourceLoader.exists(path):
+		_tex_wood = load(path) as Texture2D
+	return _tex_wood
+
+
+func _setup_wood_hud() -> void:
+	var ui_root := get_node_or_null("CanvasLayer/UIRoot") as Control
+	if ui_root == null:
+		return
+	if _wood_hud != null and is_instance_valid(_wood_hud):
+		_update_wood_ui()
+		return
+
+	_wood_hud = Control.new()
+	_wood_hud.name = "WoodHUD"
+	_wood_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wood_hud.z_index = 40
+	_wood_hud.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_wood_hud.anchor_left = 0.0
+	_wood_hud.anchor_right = 0.0
+	_wood_hud.anchor_top = 1.0
+	_wood_hud.anchor_bottom = 1.0
+	_wood_hud.offset_left = 36.0
+	_wood_hud.offset_right = 180.0
+	_wood_hud.offset_top = -118.0
+	_wood_hud.offset_bottom = -36.0
+	ui_root.add_child(_wood_hud)
+
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.set_anchors_preset(Control.PRESET_FULL_RECT)
+	row.add_theme_constant_override("separation", 8)
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	_wood_hud.add_child(row)
+
+	_wood_icon = TextureRect.new()
+	_wood_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wood_icon.texture = _wood_texture()
+	_wood_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_wood_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_wood_icon.custom_minimum_size = Vector2(52, 52)
+	row.add_child(_wood_icon)
+
+	_wood_count_lbl = Label.new()
+	_wood_count_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wood_count_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_wood_count_lbl.add_theme_font_size_override("font_size", 22)
+	_wood_count_lbl.add_theme_color_override("font_color", Color(0.92, 0.84, 0.62, 1.0))
+	_wood_count_lbl.add_theme_color_override("font_outline_color", Color(0.08, 0.05, 0.02, 0.95))
+	_wood_count_lbl.add_theme_constant_override("outline_size", 4)
+	if DMG_FONT:
+		_wood_count_lbl.add_theme_font_override("font", DMG_FONT)
+	row.add_child(_wood_count_lbl)
+
+	_update_wood_ui()
+
+
+func _update_wood_ui() -> void:
+	if _wood_count_lbl == null or not is_instance_valid(_wood_count_lbl):
+		return
+	_wood_count_lbl.text = str(maxi(0, wood))
+	if _wood_hud and is_instance_valid(_wood_hud):
+		_wood_hud.visible = true
+
+
+func add_wood(amount: int) -> void:
+	if amount == 0:
+		return
+	wood = maxi(0, wood + amount)
+	_update_wood_ui()
+
 
 # --- POTIONS: UI i logika ---
 func _update_potions_ui() -> void:
@@ -3376,7 +3518,7 @@ func _consume_weapon_equip_turn() -> void:
 		return
 	if not player.is_alive() or not enemy.is_alive():
 		return
-	if bool(current_enemy_data.get("treasure", false)):
+	if _is_noncombat_encounter():
 		return
 	# Jedna sesja inventory = maksymalnie jedno zakończenie tury za swap broni.
 	if inventory_screen and inventory_screen.visible:
@@ -4859,6 +5001,7 @@ func _dev_create_panel() -> void:
 	vbox.add_child(_dev_section_label("EVENTY"))
 	vbox.add_child(_dev_btn("⚡ Wywołaj Shrine",    func(): _dev_trigger_shrine()))
 	vbox.add_child(_dev_btn("📦 Wywołaj Chest",     func(): _dev_trigger_chest()))
+	vbox.add_child(_dev_btn("🪵 Wywołaj Wood Wagon", func(): _dev_trigger_wood_wagon()))
 	vbox.add_child(_dev_btn("💀 Wywołaj bossa",     func(): _dev_spawn_boss()))
 	vbox.add_child(_dev_btn("🏠 Wróć do domu",      func(): _dev_goto_home()))
 
@@ -4992,6 +5135,10 @@ func _dev_trigger_chest() -> void:
 	_dev_toggle_panel()
 	_request_spawn(TREASURE_CHEST_DATA.duplicate(true))
 
+func _dev_trigger_wood_wagon() -> void:
+	_dev_toggle_panel()
+	_request_spawn(WOOD_WAGON_DATA.duplicate(true))
+
 func _dev_full_heal() -> void:
 	player.hp = player.max_hp
 	player.emit_signal("hp_changed", player.hp, player.max_hp)
@@ -5011,6 +5158,9 @@ func _dev_trigger_enemy_crit() -> void:
 		return
 	if bool(current_enemy_data.get("treasure", false)):
 		_show_toast("Chest does not attack!", 1.5)
+		return
+	if _is_wood_wagon_encounter():
+		_show_toast("Wood wagon does not attack!", 1.5)
 		return
 	if resolving_turn:
 		_show_toast("Wait for current action...", 1.2)
