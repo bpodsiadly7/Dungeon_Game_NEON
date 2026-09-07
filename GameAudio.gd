@@ -8,12 +8,27 @@ const SFX_PLAYER_HIT := "res://sound/ESM_Dwarf_Vocal_One_Shot_Groan_1_Human_Game
 const SFX_PLAYER_CRIT_GRUNT := "res://sound/FightGrunt_BW.54993.wav"
 const SFX_PLAYER_CRIT_SPLATTER := "res://sound/ESM_Game_Deep_Blood_Splatter_Impact_Cinematic_Hit_Wet_Drop_Impale_Slam_Horror_Juicy_Squirt_Break.wav"
 const SFX_BOSS_ANNOUNCE := "res://sound/BS_KSPS_Synth_WarHorn_Leji_D.wav"
-const SFX_ENEMY_TRANSITION := "res://sound/ESM_Braaam_Strike_2_Hit_One_Shot_Wooden_Eclipse_Glide_Cinematic_Impact_Stinger_Movie_Trailer.wav"
+const SFX_ENEMY_TRANSITION := "res://sound/ESM_MU_Cinematic_FX_warfare_weapon_whoosh_handheld_swing_swish_fast_whip_punch_09.wav"
 const SFX_POTION_HEAL := "res://sound/ESM_Ancient_Game_Magic_Buff_Heal_2_Fantasy_Tonal_Accent_Hit_Stab.wav"
 const SFX_COLONY_LOSS := "res://sound/ESM_GB_fx_foley_one_shot_firebrst_flame_extinguish_short_01_burn_fire_flame.wav"
 const SFX_COLONY_GROWTH := "res://sound/ESM_DGF_fx_foley_footstep_stone_warrior_walk_faster_armor_war_03.wav"
+const SFX_PARRY_SUCCESS := "res://sound/ESM_SPG_fx_action_parry_impact_massive_metal_strike_crash_02.wav"
+const SFX_PARRY_FAIL := "res://sound/FL_PVT_138_Fx_Braam_System_LFO_Fmin.wav"
+const SFX_CHEST_EVENT := "res://sound/chesteventsound.wav"
+const SFX_CHEST_SLOT_LAND := "res://sound/ESM_Empire_Game_Menu_User_Interface_UI_Inventory_Placement_Ore_Metal_Item_Slot_1.wav"
+const SFX_MENU_CLICK := "res://sound/ESM_Empire_Game_Settlement_Select_Fort_Epic_Stone_Wall_Huge_Brick_Impact_Derbis_Defense.wav"
+const SFX_SCREEN_SHAKE := "res://sound/ESM_MU_FX_mechanical_whoosh_earthquake_boomy_bassy_rattling_03.wav"
+const SFX_ITEM_EQUIP := "res://sound/ESM_Horror_Game_Collect_Inventory_Item_3.wav"
+const SFX_ITEM_PICKUP := "res://sound/ESM_FG2_FX_collect_one_shot_event_confusion_neutral_swell_02.wav"
+const SFX_INVENTORY_FLAP := "res://sound/ESM_Ancient_Game_Cloth_Inventory_Item_Flap_1_Mechanical_Gear_Mechanism_Accent.wav"
+const SFX_POTION_PICKUP := "res://sound/ESM_Ambient_Game_Wet_Item_Collect_4_Water_Splash_Unlock_Bonus_Score_RPG.wav"
+const SFX_LEVEL_UP := "res://sound/ESM_Ambient_Game_Pickup_Item_Friendly_Power_Item_2_Arcade_RPG_Fun_Chime_Score_Money_Achievement.wav"
 
 const COMBAT_SFX_DB := -20.0
+const SETTINGS_UI_SFX_DB := -24.0
+const MENU_CLICK_DB := -12.0
+const SCREEN_SHAKE_DB := -14.0
+const INVENTORY_SFX_DB := -10.0
 
 const _POOL_SIZE := 8
 
@@ -24,7 +39,8 @@ var _stream_cache: Dictionary = {}
 func _ready() -> void:
 	for i in _POOL_SIZE:
 		var player := AudioStreamPlayer.new()
-		player.bus = &"Master"
+		player.bus = &"SFX"
+		player.process_mode = Node.PROCESS_MODE_ALWAYS
 		add_child(player)
 		_players.append(player)
 
@@ -67,6 +83,54 @@ func play_colony_loss_tick() -> void:
 
 func play_colony_growth_tick() -> void:
 	_play(SFX_COLONY_GROWTH, -8.0, randf_range(0.92, 1.08))
+
+
+func play_parry_success() -> void:
+	_play(SFX_PARRY_SUCCESS, COMBAT_SFX_DB, randf_range(0.96, 1.04))
+
+
+func play_parry_fail() -> void:
+	_play(SFX_PARRY_FAIL, COMBAT_SFX_DB, randf_range(0.94, 1.06))
+
+
+func play_chest_event() -> void:
+	_play(SFX_CHEST_EVENT, -6.0, randf_range(0.97, 1.03))
+
+
+func play_chest_slot_land() -> void:
+	_play(SFX_CHEST_SLOT_LAND, -6.0, randf_range(0.98, 1.02))
+
+
+func play_settings_sfx_preview() -> void:
+	_play(SFX_CHEST_SLOT_LAND, SETTINGS_UI_SFX_DB, 1.0)
+
+
+func play_menu_click() -> void:
+	_play(SFX_MENU_CLICK, MENU_CLICK_DB, randf_range(0.98, 1.02))
+
+
+func play_screen_shake() -> void:
+	_play(SFX_SCREEN_SHAKE, SCREEN_SHAKE_DB, randf_range(0.96, 1.04))
+
+
+func play_item_equip() -> void:
+	_play(SFX_ITEM_EQUIP, INVENTORY_SFX_DB, randf_range(0.98, 1.02))
+
+
+func play_item_pickup() -> void:
+	_play(SFX_ITEM_PICKUP, INVENTORY_SFX_DB, randf_range(0.96, 1.04))
+
+
+func play_inventory_flap() -> void:
+	_play(SFX_INVENTORY_FLAP, INVENTORY_SFX_DB, randf_range(0.98, 1.02))
+
+
+func play_potion_pickup() -> void:
+	_play(SFX_POTION_PICKUP, INVENTORY_SFX_DB, randf_range(0.96, 1.04))
+
+
+func play_level_up() -> void:
+	_play(SFX_LEVEL_UP, INVENTORY_SFX_DB, randf_range(0.98, 1.02))
 
 
 func _play(path: String, volume_db: float, pitch_scale: float) -> void:

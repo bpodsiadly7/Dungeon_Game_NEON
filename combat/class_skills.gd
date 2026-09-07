@@ -14,13 +14,13 @@ func basic_strike(slot: int) -> void:
 	_g._last_kill_context = {"roll": -1, "weapon_before": _g.weapon.duplicate(true)}
 	_g.enemy.take_damage(dmg)
 	_g.show_damage_popup(_g.enemy, str(dmg), "hit")
-	if _g.lbl_log:
-		_g.lbl_log.text = "Basic Strike for %d dmg." % dmg
+	_g.notify_player_hit_enemy(false, false)
+	_g.combat_log("Basic Strike for %d dmg." % dmg)
 	_g.skill_cooldowns[slot] = CombatDefs.SKILL_COOLDOWN_TURNS
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false
 
@@ -37,8 +37,8 @@ func power_strike(slot: int) -> void:
 	_g._last_kill_context = {"roll": _g.CRIT, "weapon_before": _g.weapon.duplicate(true)}
 	_g.enemy.take_damage(dmg)
 	_g.show_damage_popup(_g.enemy, str(dmg), "crit")
-	if _g.lbl_log:
-		_g.lbl_log.text = "Power Strike! Guaranteed CRIT for %d dmg (HP cost %d)." % [dmg, cost]
+	_g.notify_player_hit_enemy(true, false)
+	_g.combat_log("Power Strike! Guaranteed CRIT for %d dmg (HP cost %d)." % [dmg, cost])
 	if _g.bloodlust_lifesteal > 0.0 and _g.player.is_alive():
 		var heal = maxi(1, int(round(dmg * _g.bloodlust_lifesteal)))
 		_g.player.hp = mini(_g.player.max_hp, _g.player.hp + heal)
@@ -48,7 +48,7 @@ func power_strike(slot: int) -> void:
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false
 
@@ -62,17 +62,18 @@ func quick_slash(slot: int) -> void:
 	_g._last_kill_context = {"roll": -1, "weapon_before": _g.weapon.duplicate(true)}
 	_g.enemy.take_damage(h1)
 	_g.show_damage_popup(_g.enemy, str(h1), "hit")
+	_g.notify_player_hit_enemy(false, false)
 	await _g.get_tree().create_timer(0.05).timeout
 	if _g.enemy.is_alive():
 		_g.enemy.take_damage(h2)
 		_g.show_damage_popup(_g.enemy, str(h2), "hit")
-	if _g.lbl_log:
-		_g.lbl_log.text = "Quick Slash! %d + %d = %d dmg." % [h1, h2, total]
+		_g.notify_player_hit_enemy(false, false)
+	_g.combat_log("Quick Slash! %d + %d = %d dmg." % [h1, h2, total])
 	_g.skill_cooldowns[slot] = CombatDefs.SKILL_COOLDOWN_TURNS
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false
 
@@ -80,14 +81,13 @@ func quick_slash(slot: int) -> void:
 func shield_block(slot: int) -> void:
 	_g.resolving_turn = true
 	_g.shield_active = true
-	if _g.lbl_log:
-		_g.lbl_log.text = "Shield raised! Next incoming hit will be BLOCKED."
+	_g.combat_log("Shield raised! Next incoming hit will be BLOCKED.")
 	_g.show_damage_popup(_g.player, "SHIELD", "heal")
 	_g.skill_cooldowns[slot] = CombatDefs.SKILL_COOLDOWN_TURNS
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false
 
@@ -101,8 +101,7 @@ func fury(slot: int) -> void:
 		var roll: int = randi_range(1, 20)
 		await _g._dice.play_d20_animation(roll)
 		var desc: String = _g._player_attacks.attack_round_with_roll(roll)
-		if _g.lbl_log:
-			_g.lbl_log.text = "%s: strike %d/2\n%s" % [log_prefix, i + 1, desc]
+		_g.combat_log("%s: strike %d/2\n%s" % [log_prefix, i + 1, desc])
 		await _g.get_tree().create_timer(0.08).timeout
 		if not _g.enemy.is_alive():
 			break
@@ -110,6 +109,6 @@ func fury(slot: int) -> void:
 	_g._update_skills_ui()
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false

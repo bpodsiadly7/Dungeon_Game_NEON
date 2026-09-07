@@ -70,6 +70,8 @@ func _level_up() -> void:
 	level += 1
 	stat_points += 3  # ile punktów rozdajesz na level
 	_recalc_xp_to_next()
+	if GameAudio:
+		GameAudio.play_level_up()
 	emit_signal("level_changed", level, stat_points)
 	emit_signal("stats_changed", strength, agility, vitality, crit, stat_points)
 

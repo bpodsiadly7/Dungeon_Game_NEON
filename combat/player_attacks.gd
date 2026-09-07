@@ -76,6 +76,7 @@ func attack_round_with_roll(
 	text += "You roll %d vs Armor %d → %s for %d dmg.\n" % [
 		roll, enemy_armor, "CRIT" if crit else ("HALF" if roll == enemy_armor else "HIT"), dmg
 	]
+	_g.notify_player_hit_enemy(crit, roll == enemy_armor)
 
 	if crit and _g.bloodlust_lifesteal > 0.0 and _g.player.is_alive():
 		var heal = maxi(1, int(round(dmg * _g.bloodlust_lifesteal)))
@@ -108,9 +109,20 @@ func execute_attack(mode: int) -> void:
 
 	if bool(_g.current_enemy_data.get("treasure", false)):
 		_g.resolving_turn = true
-		if _g.lbl_log:
-			_g.lbl_log.text = "You open the chest..."
-		await _g.get_tree().create_timer(0.3).timeout
+		_g.combat_log("You open the chest...")
+		var reward: Dictionary = _g._roll_treasure_chest_reward()
+		await _g._run_chest_minigame(reward)
+		_g._apply_treasure_chest_reward(reward)
+		_g._chest_reward_handled = true
+		_g.enemy.take_damage(_g.enemy.hp)
+		_g.resolving_turn = false
+		return
+
+	if bool(_g.current_enemy_data.get("wood_wagon", false)):
+		_g.resolving_turn = true
+		_g.combat_log("Catch the falling wood!")
+		await _g._run_wood_wagon_encounter()
+		_g._wood_wagon_reward_handled = true
 		_g.enemy.take_damage(_g.enemy.hp)
 		_g.resolving_turn = false
 		return
@@ -150,10 +162,9 @@ func execute_attack(mode: int) -> void:
 				d10_roll, int(round((wild_mult - 1.0) * 100.0))
 			]
 
-	if _g.lbl_log:
-		_g.lbl_log.text = desc
+	_g.combat_log(desc)
 	await _g.get_tree().create_timer(0.1).timeout
 	if _g.enemy.is_alive():
-		_g.set_turn(_g.Turn.ENEMY)
+		await _g.set_turn(_g.Turn.ENEMY)
 	_g._tick_skill_cooldowns()
 	_g.resolving_turn = false

@@ -45,19 +45,23 @@ func _ready() -> void:
 
 	var vp := get_viewport()
 	if vp:
-		_cursor_pos = vp.get_mouse_position()
+		_cursor_pos = _canvas_mouse_position()
 	_cursor_root.position = _cursor_pos
 	_apply_strength()
+
+
+func _canvas_mouse_position() -> Vector2:
+	var vp := get_viewport()
+	if vp == null:
+		return Vector2.ZERO
+	return vp.get_mouse_position()
 
 
 func _process(delta: float) -> void:
 	if not enabled:
 		_set_visible(false)
 		return
-	var vp := get_viewport()
-	if vp == null:
-		return
-	var mouse := vp.get_mouse_position()
+	var mouse := _canvas_mouse_position()
 	_cursor_pos = mouse
 	_cursor_root.position = _cursor_pos
 	_streak.fade_sec = streak_fade_sec
@@ -97,6 +101,7 @@ func _make_glow_sprite(scale_mul: float, tint: Color) -> Sprite2D:
 	spr.scale = Vector2(scale_mul, scale_mul)
 	spr.modulate = tint
 	spr.material = _add_mat
+	spr.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	return spr
 
 

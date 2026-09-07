@@ -26,6 +26,7 @@ const _ATTACK_SLOT_HIGHLIGHT_SHADER := preload("res://ui/attack_slot_highlight.g
 const _FLOATING_DAMAGE_NUMBERS := preload("res://ui/floating_damage_numbers.gd")
 const _NEAR_DEATH_WARNING_SCRIPT := preload("res://ui/near_death_warning.gd")
 const _ENEMY_DEATH_ICON_FX := preload("res://ui/enemy_death_icon_fx.gd")
+const _GAME_BANNER_TOAST := preload("res://ui/game_banner_toast.gd")
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_BASIC := Color(0.88, 0.94, 1.0, 1.0)
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_SAFE := Color(0.78, 1.0, 0.86, 1.0)
 const _ATTACK_SLOT_HIGHLIGHT_ACCENT_WILD := Color(1.0, 0.78, 0.72, 1.0)
@@ -98,8 +99,19 @@ var _default_dice_set: Array[DiceDef] = []
 
 var current_enemy_data: Dictionary = {}
 var resolving_turn: bool = false
+var _chest_reward_handled: bool = false
 var _game_pause_depth: int = 0
 var _inventory_pause_active: bool = false
+var _last_shake_sfx_ms: int = 0
+var _level_banner_ready: bool = false
+var _level_banner_seen: int = 0
+var _level_banner_pending: int = 0
+var _level_banner_queued: bool = false
+## W jednym otwarciu inventory zmiana broni kończy turę najwyżej raz.
+var _weapon_swap_turn_spent_this_inventory: bool = false
+const COMBAT_LOG_MAX_LINES := 4
+var _combat_log_lines: Array[String] = []
+var _combat_tips_armed: bool = false
 
 var _dice: DicePlayback
 var _player_attacks: PlayerAttacks
@@ -107,6 +119,7 @@ var _weapon_skills: WeaponSkills
 var _class_skills: ClassSkills
 var _skill_runtime: SkillRuntime
 var _weapon_equipment: WeaponEquipment
+var _status_effects: StatusEffects
 
 var _heal_particles: GPUParticles2D
 
@@ -125,6 +138,51 @@ const CLASS_TEXTURES := {
 	"guardian":  "res://player_classes/dwarf_guardian.png",
 	"barbarian": "res://player_classes/dwarf_barbarian.png",
 }
+
+const CLASS_EVOLUTION_INFO := {
+	"warrior": {
+		"name": "Warrior",
+		"tagline": "Iron master of the blade.",
+		"active": "Power Strike — guaranteed critical hit (costs 10% HP).",
+		"passive": "Weapon Mastery — +10% weapon damage.",
+		"accent": Color(0.95, 0.55, 0.35),
+	},
+	"assassin": {
+		"name": "Assassin",
+		"tagline": "Swift and unseen.",
+		"active": "Quick Slash — two fast hits (60–100% dmg each).",
+		"passive": "Cat Movement — 5% chance to dodge a hit.",
+		"accent": Color(0.45, 0.90, 0.65),
+	},
+	"guardian": {
+		"name": "Guardian",
+		"tagline": "Unbreakable bulwark.",
+		"active": "Shield — block the next incoming hit.",
+		"passive": "Heavily Armed — +1 Armor.",
+		"accent": Color(0.45, 0.70, 1.0),
+	},
+	"barbarian": {
+		"name": "Barbarian",
+		"tagline": "Uncontrolled fury.",
+		"active": "Fury — two back-to-back attacks.",
+		"passive": "Bloodlust — heal 10% of damage on CRIT.",
+		"accent": Color(0.95, 0.35, 0.30),
+	},
+}
+
+var _evolution_overlay: Control = null
+var _evolution_tooltip: VBoxContainer = null
+var _evolution_hint_label: Label = null
+var _evolution_particles: Dictionary = {}
+var _evolution_slot_nodes: Dictionary = {}
+var _evolution_hovered_key: String = ""
+var _evolution_particles_root: Node2D = null
+var _evolution_title_host: Control = null
+var _evolution_content: Control = null
+var _evolution_dim: ColorRect = null
+var _evolution_suppressed_ui: Array = []
+var _evolution_ready: bool = false
+var _evolution_pending: bool = false
 
 # --- SKILLS ---
 const SKILL_COOLDOWN_TURNS := CombatDefs.SKILL_COOLDOWN_TURNS
@@ -217,6 +275,13 @@ const TEX_HP_BOTTLE_1: Texture2D = preload("res://ikony/HpBottleIcon.png")
 const TEX_HP_BOTTLE_2: Texture2D = preload("res://ikony/HpBottleIcon2.png")
 const TEX_HP_BOTTLE_3: Texture2D = preload("res://ikony/HpBottleIcon3.png")
 var potions:int = 0
+
+# --- Wood (run resource; later: building / crafting) ---
+var wood: int = 0
+var _wood_hud: Control
+var _wood_icon: TextureRect
+var _wood_count_lbl: Label
+var _tex_wood: Texture2D
 
 # --- LOOT / DROP ---
 # Szansa na drop jakiegokolwiek itemu vs. trudność przeciwnika
@@ -389,22 +454,18 @@ var _event_gap_counter: int = 0      # rośnie przy zwykłych wrogach, reset prz
 const TREASURE_EVENT_CHANCE := 0.10  # 10% szansy zamiast przeciwnika (zmień, jeśli chcesz)
 const TREASURE_TEX := "res://treasures/mystery_chest.png"  # opcjonalna grafika skrzyni
 
+## Wood wagon — ta sama bazowa szansa co chest (osobny roll po chest).
+## Po MIN_EVENT_INTERVAL: Shrine 10% → Chest 10% → Wagon 10% (kolejno).
+const WOOD_WAGON_EVENT_CHANCE := 0.10
+const WOOD_WAGON_TEX := "res://treasures/wooden_wagon.png"
+
 const SHRINE_CHANCE: float = 0.10  # TESTOWO (łatwo wywołać). Po teście zmień np. na 0.10.
-var shrine_dialog: AcceptDialog
-var shrine_list_box: VBoxContainer
-var shrine_preview: RichTextLabel
-var _shrine_pending_key: String = ""
-var _shrine_pending_idx: int = -1
-var _shrine_confirm_overlay: ColorRect = null
-var _shrine_confirm_panel: PanelContainer = null
-var _shrine_dialog_open: bool = false
+var _shrine_open: bool = false
 var _shrine_locked: bool = false
-var _shrine_in_progress: bool = false 
+var _shrine_in_progress: bool = false
 var shrine_cooldown: int = 0              # ile zwykłych walk jeszcze blokuje Shrine
 var _encounter_replaced_by_event: bool = false  # czy aktualny encounter to event (Shrine/Chest)
-
-
-
+var _wood_wagon_reward_handled: bool = false
 
 
 const TREASURE_CHEST_DATA := {
@@ -414,6 +475,15 @@ const TREASURE_CHEST_DATA := {
 	"difficulty": 5,   # żeby użyć tych samych wag jak boss (drop/rarity)
 	"treasure": true,
 	"tex": TREASURE_TEX
+}
+
+const WOOD_WAGON_DATA := {
+	"name": "Wood Wagon",
+	"hp": 50,
+	"damage": 0,
+	"difficulty": 1,
+	"wood_wagon": true,
+	"tex": WOOD_WAGON_TEX
 }
 
 
@@ -585,7 +655,10 @@ func _ready() -> void:
 		_on_player_xp_changed(player.xp, player.xp_to_next)
 		_on_player_level_changed(player.level, player.stat_points)
 	if player.level >= EVOLVE_LEVEL:
-		_show_evolution_choice()
+		_request_evolution_choice()
+
+	_level_banner_seen = player.level
+	_level_banner_ready = true
 
 	# Inventory + UI
 	_load_permanent_items_into_inventory()
@@ -652,7 +725,7 @@ func _ready() -> void:
 	else:
 		add_child(lbl_dungeon_name)
 
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
 	# tylko w wersji testowej gry:
 	#_dev_fill_inventory()
 	set_process_unhandled_input(true)
@@ -669,6 +742,8 @@ func _ready() -> void:
 	# Podłącz inventory screen
 	if inventory_screen:
 		inventory_screen.closed.connect(_on_inventory_closed)
+		inventory_screen.shrine_item_confirmed.connect(_on_shrine_item_confirmed)
+		inventory_screen.shrine_closed.connect(_on_shrine_closed)
 		inventory_screen.item_equipped.connect(_on_inventory_equip)
 		inventory_screen.item_dropped.connect(_on_inventory_drop)
 		inventory_screen.item_unequipped.connect(_on_inventory_unequip)
@@ -694,8 +769,91 @@ func _ready() -> void:
 
 	# ... koniec _ready() 
 	print("[DEBUG] _ready() END")
+	_setup_combat_log_ui()
+	_setup_wood_hud()
 	_ensure_unspent_points_label()
 	_update_unspent_points_indicator(player.stat_points)
+	_combat_tips_armed = true
+	_maybe_show_combat_tips()
+
+
+func combat_log(msg: String) -> void:
+	var line := String(msg).strip_edges()
+	if line == "":
+		return
+	# Jedna wiadomość może mieć kilka linii (np. opis ataku) — bierzemy pierwszą jako nagłówek logu.
+	var first := line.split("\n")[0].strip_edges()
+	if first == "":
+		first = line
+	_combat_log_lines.append(first)
+	while _combat_log_lines.size() > COMBAT_LOG_MAX_LINES:
+		_combat_log_lines.pop_front()
+	if lbl_log == null:
+		return
+	lbl_log.visible = true
+	lbl_log.text = "\n".join(_combat_log_lines)
+
+
+func _setup_combat_log_ui() -> void:
+	if lbl_log == null:
+		return
+	lbl_log.visible = true
+	lbl_log.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl_log.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	lbl_log.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	lbl_log.custom_minimum_size = Vector2(420, 78)
+	lbl_log.add_theme_font_size_override("font_size", 15)
+	lbl_log.add_theme_color_override("font_color", Color(0.90, 0.86, 0.78, 0.95))
+	lbl_log.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.03, 0.9))
+	lbl_log.add_theme_constant_override("outline_size", 3)
+	if DMG_FONT:
+		lbl_log.add_theme_font_override("font", DMG_FONT)
+	if _combat_log_lines.is_empty():
+		combat_log("Ready for battle.")
+
+
+func _combat_tips_done() -> bool:
+	return bool(GameState.meta.get("combat_tips_done", false))
+
+
+func _mark_combat_tips_done() -> void:
+	GameState.meta["combat_tips_done"] = true
+	GameState.save(GameState.current_slot)
+
+
+func _maybe_show_combat_tips() -> void:
+	if not _combat_tips_armed or _combat_tips_done():
+		return
+	_mark_combat_tips_done()
+	var parent := _ui_root()
+	var tip_accent := Color(0.78, 0.86, 0.95, 1.0)
+	_GAME_BANNER_TOAST.show(
+		parent,
+		"TIP  ·  ATTACKS",
+		"Basic · Safe · Wild",
+		"Basic = standard hit. Safe adds Armor. Wild hits harder but lowers Armor.",
+		tip_accent,
+		3.0,
+		DMG_FONT
+	)
+	_GAME_BANNER_TOAST.show(
+		parent,
+		"TIP  ·  ARMOR",
+		"Roll d20 vs Armor",
+		"Higher Armor makes hits weaker. Crits ignore Armor. Misses deal no damage.",
+		tip_accent,
+		3.0,
+		DMG_FONT
+	)
+	_GAME_BANNER_TOAST.show(
+		parent,
+		"TIP  ·  SKILLS",
+		"Keys 1 and 2",
+		"Weapon and class skills have cooldowns. Watch the skill bar under your attacks.",
+		tip_accent,
+		3.0,
+		DMG_FONT
+	)
 
 
 func _init_combat_modules() -> void:
@@ -705,6 +863,13 @@ func _init_combat_modules() -> void:
 	_class_skills = ClassSkills.new(self)
 	_skill_runtime = SkillRuntime.new(self)
 	_weapon_equipment = WeaponEquipment.new(self)
+	_status_effects = StatusEffects.new(self)
+	_status_effects.setup_world_markers(player, enemy)
+
+
+func notify_player_hit_enemy(crit: bool = false, glancing: bool = false) -> void:
+	if _status_effects:
+		_status_effects.on_player_hit_enemy(crit, glancing)
 
 
 func _sync_inventory_screen_if_open() -> void:
@@ -733,35 +898,50 @@ func _sync_inventory_screen_if_open() -> void:
 	inventory_screen._refresh_backpack()
 
 
+func _inventory_ui_stats() -> Dictionary:
+	var e := _player_effective_stat_pack_for_ui()
+	return {
+		"str": int(e["str"]),
+		"agi": int(e["agi"]),
+		"vit": int(e["vit"]),
+		"crit": int(e["crit"]),
+		"stat_points": player.stat_points,
+		"hp": player.hp,
+		"max_hp": player.max_hp,
+		"chosen_class": chosen_class,
+		"passive_armor_bonus": passive_armor_bonus,
+	}
+
+
+func _inventory_ui_equipped() -> Dictionary:
+	return {
+		"weapon": weapon,
+		"armor": equipped_armor,
+		"helmet": equipped_helmet,
+		"necklace": equipped_necklace,
+		"gloves": equipped_gloves,
+		"boots": equipped_boots,
+		"ring1": equipped_ring1,
+		"ring2": equipped_ring2,
+	}
+
+
 func open_inventory() -> void:
+	if _shrine_open:
+		return
+	if resolving_turn:
+		return
 	if inventory_screen:
-		var e := _player_effective_stat_pack_for_ui()
-		var stats := {
-			"str": int(e["str"]),
-			"agi": int(e["agi"]),
-			"vit": int(e["vit"]),
-			"crit": int(e["crit"]),
-			"stat_points": player.stat_points,
-			"hp":     player.hp,
-			"max_hp": player.max_hp,
-			"chosen_class": chosen_class,
-			"passive_armor_bonus": passive_armor_bonus,
-		}
-		var eq := {
-			"weapon":   weapon,
-			"armor":    equipped_armor,
-			"helmet":   equipped_helmet,
-			"necklace": equipped_necklace,
-			"gloves":   equipped_gloves,
-			"boots":    equipped_boots,
-			"ring1":    equipped_ring1,
-			"ring2":    equipped_ring2,
-		}
-		inventory_screen.open(inventory, eq, stats)
+		_weapon_swap_turn_spent_this_inventory = false
+		inventory_screen.open(inventory, _inventory_ui_equipped(), _inventory_ui_stats())
 		_set_inventory_paused(true)
+		if _status_effects:
+			_status_effects.set_markers_layer_visible(false)
 
 func _on_inventory_closed() -> void:
 	_set_inventory_paused(false)
+	if _status_effects:
+		_status_effects.set_markers_layer_visible(true)
 	_update_near_death_warning()
 	print("[INVENTORY] Closed")
 
@@ -887,32 +1067,68 @@ func _apply_global_font() -> void:
 
 func set_turn(t: Turn) -> void:
 	turn = t
+	_set_attack_buttons_disabled(true)
+
 	if t == Turn.PLAYER:
 		_refresh_player_armor_label()
-	_update_near_death_warning()
-	_set_attack_buttons_disabled(turn != Turn.PLAYER)
-	if turn == Turn.PLAYER:
-		if lbl_log: lbl_log.text = "Your turn. Choose an attack."
+		if _status_effects:
+			await _status_effects.tick_turn_start_async("player")
+		if not player.is_alive():
+			resolving_turn = false
+			_update_potions_ui()
+			return
+		_update_near_death_warning()
+		_set_attack_buttons_disabled(_is_evolution_choice_open())
+		resolving_turn = false
+		_update_potions_ui()
+		combat_log("Your turn. Choose an attack.")
+		_maybe_show_combat_tips()
 	else:
-		if lbl_log: lbl_log.text = "Enemy is thinking..."
+		if _status_effects:
+			await _status_effects.tick_turn_start_async("enemy")
+		resolving_turn = false
+		combat_log("Enemy is thinking...")
+		if _is_evolution_choice_open():
+			_update_potions_ui()
+			return
+		if not enemy.is_alive():
+			_update_potions_ui()
+			return
 		await get_tree().create_timer(enemy_turn_delay).timeout
-		_enemy_take_turn()
+		if _is_evolution_choice_open():
+			_update_potions_ui()
+			return
+		if not enemy.is_alive():
+			_update_potions_ui()
+			return
+		await _enemy_take_turn()
+		_update_potions_ui()
+		return
+
 	_update_potions_ui()
 
 func _enemy_take_turn() -> void:
+	if _is_evolution_choice_open():
+		return
 	if resolving_turn: return
 	if turn != Turn.ENEMY or not enemy.is_alive() or not player.is_alive(): return
 	resolving_turn = true
-	var desc := _enemy_attack_round()
-	if lbl_log: lbl_log.text = desc
+	var desc: String = await _enemy_attack_round_async()
+	combat_log(desc)
 	await get_tree().create_timer(0.1).timeout
 	if player.is_alive():
-		set_turn(Turn.PLAYER)
+		await set_turn(Turn.PLAYER)
 	resolving_turn = false
 
 func shake_camera(intensity: float = 6.0, duration: float = 0.15) -> void:
 	if cam == null:
 		return
+	if intensity >= 7.0:
+		var now_ms := Time.get_ticks_msec()
+		if now_ms - _last_shake_sfx_ms >= 400:
+			_last_shake_sfx_ms = now_ms
+			if GameAudio:
+				GameAudio.play_screen_shake()
 	var original := cam.offset
 	var t := get_tree().create_tween()
 	var steps := 6
@@ -951,7 +1167,7 @@ func hitstop(time_sec: float = 0.07) -> void:
 	_pop_game_pause()
 
 func _pick_enemy() -> Dictionary:
-	# 1) Eventy (Shrine / Chest) tylko gdy minął odstęp
+	# 1) Eventy (Shrine / Chest / Wood Wagon) tylko gdy minął odstęp
 	if _event_gap_counter >= MIN_EVENT_INTERVAL:
 		# --- Sacred Shrine (EVENT) ---
 		if randf() < SHRINE_CHANCE:
@@ -961,6 +1177,10 @@ func _pick_enemy() -> Dictionary:
 		if randf() < TREASURE_EVENT_CHANCE:
 			_event_gap_counter = 0
 			return TREASURE_CHEST_DATA.duplicate(true)
+		# --- Wood Wagon (EVENT) — ta sama bazowa szansa co chest ---
+		if randf() < WOOD_WAGON_EVENT_CHANCE:
+			_event_gap_counter = 0
+			return WOOD_WAGON_DATA.duplicate(true)
 
 	# 2) Budowa puli zwykłych przeciwników
 	var pool: Array[Dictionary] = []
@@ -1011,6 +1231,8 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 
 	player_temp_armor_delta = 0
 	enemy_armor_penalty = 0
+	if _status_effects:
+		_status_effects.clear_target("enemy")
 	current_enemy_data = data.duplicate(true)
 	# Ensure armor exists (new armor system). Fallback from difficulty.
 	if not current_enemy_data.has("armor"):
@@ -1022,23 +1244,32 @@ func _spawn_enemy_impl(data: Dictionary) -> void:
 		current_enemy_data["damage"],
 		current_enemy_data.get("tex", ""),
 		int(current_enemy_data.get("difficulty", 1)),
-		bool(current_enemy_data.get("treasure", false))
+		_is_noncombat_encounter(current_enemy_data)
 	)
 	_update_labels()
 	_update_near_death_warning()
 
 
 	if data.get("treasure", false):
-		if lbl_log:
-			lbl_log.text = "A mysterious chest appears! Press Attack to open it."
+		combat_log("A mysterious chest appears! Press Attack to open it.")
+	elif data.get("wood_wagon", false):
+		combat_log("A wood wagon stands here! Press Attack to catch falling wood.")
 	else:
-		if lbl_log:
-			lbl_log.text = "A wild %s appears!" % data["name"]
+		combat_log("A wild %s appears!" % data["name"])
 		if _is_current_boss(name):
 			var audio := get_node_or_null("/root/GameAudio")
 			if audio:
 				audio.play_boss_announce()
 
+
+func _is_noncombat_encounter(data: Dictionary = {}) -> bool:
+	var d: Dictionary = data if not data.is_empty() else current_enemy_data
+	return bool(d.get("treasure", false)) or bool(d.get("wood_wagon", false))
+
+
+func _is_wood_wagon_encounter(data: Dictionary = {}) -> bool:
+	var d: Dictionary = data if not data.is_empty() else current_enemy_data
+	return bool(d.get("wood_wagon", false))
 
 
 func _prepare_next_enemy_with_popup() -> void:
@@ -1066,12 +1297,29 @@ func _on_next_enemy_confirmed() -> void:
 			next_enemy_data = {"name":"Fallback Goblin","hp":20,"damage":5,"difficulty":1}
 	_request_spawn(next_enemy_data)
 	next_enemy_data = {}
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
+
+func _can_open_pause_menu() -> bool:
+	if resolving_turn:
+		return false
+	if _is_evolution_choice_open():
+		return false
+	return true
+
 
 func _process(_d: float) -> void:
 	if Input.is_action_just_pressed("ui_cancel"):  # ESC
+		if SettingsUI:
+			if SettingsUI.should_block_pause_open():
+				return
+			if SettingsUI.is_pause_open() or SettingsUI.is_settings_open():
+				return
 		if inventory_screen and inventory_screen.visible:
 			inventory_screen._on_close()
+			return
+		if _can_open_pause_menu() and SettingsUI:
+			SettingsUI.open_pause(self)
+			return
 	
 	if Input.is_action_just_pressed("attack"):
 		_try_attack_hotkey(AttackMode.BASIC)
@@ -1256,40 +1504,39 @@ func _d10_face_value(roll_1_to_10: int) -> int:
 
 
 # --- Tura przeciwnika ---
-func _enemy_attack_round() -> String:
+func _enemy_attack_round_async(force_crit: bool = false) -> String:
 	if not enemy.is_alive() or not player.is_alive():
 		return ""
-		# Treasure Chest – nie atakuje
 	if bool(current_enemy_data.get("treasure", false)):
-		# nic nie robi; wracamy turę do gracza
 		return "The chest does nothing..."
+	if _is_wood_wagon_encounter():
+		return "The wood wagon does nothing..."
 
-	var roll: int = randi_range(1, 20)
+	var roll: int = CRIT if force_crit else randi_range(1, 20)
 	var player_armor: int = _calc_player_armor_total()
 
-	# CRIT przeciwnika
 	if roll == CRIT:
-		# Pasywny unik Assassina (5% wg passive_dodge_chance)
 		if passive_dodge_chance > 0.0 and randf() < passive_dodge_chance:
 			show_damage_popup(player, "dodge", "miss")
 			return "Enemy rolls %d → would CRIT, but you DODGE!" % roll
+		var parried := await _run_crit_parry_minigame()
+		if parried:
+			show_damage_popup(player, "PARRY", "miss")
+			return "Enemy rolls %d → CRIT, but you PARRY! No damage." % roll
 		var dmg_crit: int = int(round(enemy.damage * CRIT_MULT))
 		_apply_player_damage(dmg_crit, "crit")
 		return "Enemy rolls %d vs Armor %d → CRIT for %d dmg." % [roll, player_armor, dmg_crit]
 
-	# MISS
 	if roll < player_armor:
 		show_damage_popup(player, "dodge", "miss")
 		return "Enemy rolls %d vs Armor %d → MISS." % [roll, player_armor]
 
-	# HALF
 	if roll == player_armor:
 		var dmg_half: int = max(1, int(round(float(enemy.damage) * 0.5)))
 		_apply_player_damage(dmg_half, "hit")
 		return "Enemy rolls %d vs Armor %d → HALF for %d dmg." % [roll, player_armor, dmg_half]
 
-	# Scaled hit
-	elif roll > player_armor:
+	if roll > player_armor:
 		if passive_dodge_chance > 0.0 and randf() < passive_dodge_chance:
 			show_damage_popup(player, "dodge", "miss")
 			return "Enemy rolls %d → would HIT, but you DODGE!" % roll
@@ -1300,6 +1547,105 @@ func _enemy_attack_round() -> String:
 	return ""
 
 
+func _crit_parry_rot_speed_for_enemy() -> float:
+	var diff := clampi(int(current_enemy_data.get("difficulty", 1)), 1, 5)
+	return lerpf(5.0, 12.0, float(diff - 1) / 4.0)
+
+
+func _run_crit_parry_minigame() -> bool:
+	var layer := $CanvasLayer
+	if layer == null:
+		return false
+	var mg := CritParryMinigame.new()
+	layer.add_child(mg)
+	var ok: bool = await mg.run(_crit_parry_rot_speed_for_enemy())
+	if is_instance_valid(mg):
+		mg.queue_free()
+	return ok
+
+
+func _roll_treasure_chest_reward() -> Dictionary:
+	var boss_drop_chance := float(DROP_CHANCE_BY_DIFF.get(5, 0.42))
+	if randf() <= boss_drop_chance:
+		var slot_roll := randi() % 100
+		var slot_key := ""
+		if slot_roll < 40:
+			slot_key = "weapon"
+		elif slot_roll < 75:
+			slot_key = "armor"
+		elif slot_roll < 90:
+			slot_key = "helmet"
+		else:
+			slot_key = "necklace"
+		var rarity := _weighted_rarity_by_diff(5)
+		var item := _gen_random_item(slot_key, rarity, 5)
+		return {
+			"kind": "item",
+			"item": item,
+			"color": RARITY_COLORS.get(rarity, Color.WHITE),
+		}
+	return {
+		"kind": "heal",
+		"icons": [TEX_HP_BOTTLE_1, TEX_HP_BOTTLE_2, TEX_HP_BOTTLE_3],
+	}
+
+
+func _apply_treasure_chest_reward(reward: Dictionary) -> void:
+	if reward.get("kind") == "item":
+		var item: Dictionary = reward.get("item", {})
+		var ref := _add_item_to_inventory(item)
+		combat_log("Treasure: %s (%s)" % [
+			str(item.get("name", "???")),
+			_rarity_name(int(item.get("rarity", Rarity.COMMON)))
+		])
+		_sync_inventory_screen_if_open()
+		if not ref.is_empty():
+			_show_loot_toast(item)
+	else:
+		player.hp = player.max_hp
+		player.emit_signal("hp_changed", player.hp, player.max_hp)
+		if potions < POTION_MAX:
+			potions = POTION_MAX
+			_update_potions_ui()
+			if GameAudio:
+				GameAudio.play_potion_pickup()
+		show_damage_popup(player, "FULL HEAL", "heal")
+		combat_log("Treasure: fully healed and potions refilled!")
+
+
+func _run_chest_minigame(reward: Dictionary) -> void:
+	var layer := $CanvasLayer
+	if layer == null:
+		return
+	var mg := ChestMinigame.new()
+	layer.add_child(mg)
+	await mg.run(reward)
+	if is_instance_valid(mg):
+		mg.queue_free()
+
+
+func _apply_wood_wagon_reward(amount: int) -> void:
+	var gained := maxi(0, amount)
+	if gained <= 0:
+		combat_log("You gather no wood from the wagon.")
+		return
+	add_wood(gained)
+	combat_log("You gather %d wood from the wagon." % gained)
+	show_damage_popup(player, "+%d Wood" % gained, "xp")
+
+
+func _run_wood_wagon_encounter() -> void:
+	var layer := $CanvasLayer
+	if layer == null:
+		_apply_wood_wagon_reward(0)
+		return
+	var mg := WoodWagonMinigame.new()
+	layer.add_child(mg)
+	var caught: int = await mg.run()
+	_apply_wood_wagon_reward(caught)
+	if is_instance_valid(mg):
+		mg.queue_free()
+
 
 # Wspólna aplikacja obrażeń na gracza
 func _apply_player_damage(dmg:int, kind:String = "hit") -> void:
@@ -1307,8 +1653,7 @@ func _apply_player_damage(dmg:int, kind:String = "hit") -> void:
 	if shield_active:
 		shield_active = false
 		show_damage_popup(player, "BLOCK", "heal")
-		if lbl_log:
-			lbl_log.text = "Your shield blocks the entire hit!"
+		combat_log("Your shield blocks the entire hit!")
 		return
 
 	var original:int = clamp(dmg, 0, 99999)
@@ -1325,6 +1670,8 @@ func _apply_player_damage(dmg:int, kind:String = "hit") -> void:
 
 	player.take_damage(final_dmg)
 	show_damage_popup(player, str(final_dmg), kind)
+	if _status_effects:
+		_status_effects.on_enemy_hit_player()
 
 
 
@@ -1367,11 +1714,19 @@ func _transition_to_next_enemy() -> void:
 
 
 func _flat_weapon_dmg_from_armor_pieces() -> int:
-	var total := 0
-	for it in [equipped_helmet, equipped_armor, equipped_gloves, equipped_boots]:
-		if typeof(it) != TYPE_DICTIONARY or (it as Dictionary).is_empty():
+	var eq := {
+		"armor": equipped_armor,
+		"helmet": equipped_helmet,
+		"gloves": equipped_gloves,
+		"boots": equipped_boots,
+	}
+	var counts := ArmorSetRules.type_counts(eq)
+	var total := ArmorSetRules.berserker_set_dmg_bonus(counts)
+	for slot_key in ArmorSetRules.SET_SLOTS:
+		var it: Dictionary = eq.get(slot_key, {})
+		if it.is_empty():
 			continue
-		var b: Dictionary = (it as Dictionary).get("bonuses", {})
+		var b: Dictionary = it.get("bonuses", {})
 		total += int(b.get("weapon_dmg", 0))
 	return total
 
@@ -1420,25 +1775,13 @@ func _calc_player_armor_total() -> int:
 	var base := 0
 	if not equipped_armor.is_empty():
 		base = int(equipped_armor.get("armor", 0))
-	var types := []
-	for it in [equipped_armor, equipped_helmet, equipped_gloves, equipped_boots]:
-		if typeof(it) == TYPE_DICTIONARY and not (it as Dictionary).is_empty():
-			var t := String((it as Dictionary).get("armor_type", ""))
-			# Berserker nie daje bonusu setowego do armor — tylko flat dmg z bonuses.
-			if t != "" and t != "berserker":
-				types.append(t)
-	# set bonus: 2 same -> +1, 3 same -> +2
-	var bonus := 0
-	if types.size() >= 2:
-		var counts := {}
-		for t in types:
-			counts[t] = int(counts.get(t, 0)) + 1
-		for t in counts.keys():
-			var c := int(counts[t])
-			if c == 2:
-				bonus = max(bonus, 1)
-			elif c >= 3:
-				bonus = max(bonus, 2)
+	var counts := ArmorSetRules.type_counts({
+		"armor": equipped_armor,
+		"helmet": equipped_helmet,
+		"gloves": equipped_gloves,
+		"boots": equipped_boots,
+	})
+	var bonus := ArmorSetRules.armor_set_bonus(counts)
 	return clamp(base + bonus + passive_armor_bonus + player_temp_armor_delta, 0, 15)
 
 func _on_enemy_hp_changed(cur:int, maxv:int) -> void:
@@ -1465,47 +1808,18 @@ func _on_enemy_defeated() -> void:
 		last_enemy = current_enemy_data.duplicate(true)
 		# --- Treasure Chest reward flow ---
 	if bool(last_enemy.get("treasure", false)):
-		# SZANSA na drop jak u bossa: DROP_CHANCE_BY_DIFF[5]; w przeciwnym razie HEAL
-		var boss_drop_chance := float(DROP_CHANCE_BY_DIFF.get(5, 0.42))
-		var did_drop_item := (randf() <= boss_drop_chance)
-
-		if did_drop_item:
-			# losujemy slot i item jak przy zwykłym dropie, ale diff=5 (boss)
-			var slot_roll := randi() % 100
-			var slot_key := ""
-			if slot_roll < 40:
-				slot_key = "weapon"
-			elif slot_roll < 75:
-				slot_key = "armor"
-			elif slot_roll < 90:
-				slot_key = "helmet"
-			else:
-				slot_key = "necklace"
-
-			var rarity := _weighted_rarity_by_diff(5)
-			var item := _gen_random_item(slot_key, rarity, 5)
-			var ref := _add_item_to_inventory(item)
-
-			if lbl_log:
-				lbl_log.text = "Treasure: %s (%s)" % [str(item.get("name","???")), _rarity_name(int(item.get("rarity", Rarity.COMMON)))]
-			show_damage_popup(player, str(item.get("name","???")), "heal")
-			_sync_inventory_screen_if_open()
-			if not ref.is_empty():
-				_show_loot_toast(item)
+		if not _chest_reward_handled:
+			var reward := _roll_treasure_chest_reward()
+			_apply_treasure_chest_reward(reward)
 		else:
-			# pełne leczenie + dopełnienie mikstur do 3
-			player.hp = player.max_hp
-			player.emit_signal("hp_changed", player.hp, player.max_hp)
-			if potions < POTION_MAX:
-				potions = POTION_MAX
-				_update_potions_ui()
-			show_damage_popup(player, "FULL HEAL", "heal")
-			if lbl_log:
-				lbl_log.text = "Treasure: fully healed and potions refilled!"
-
-		# Po nagrodzie – od razu kolejny przeciwnik
+			_chest_reward_handled = false
 		await _transition_to_next_enemy()
-		set_turn(Turn.PLAYER)
+		await set_turn(Turn.PLAYER)
+		return
+	if bool(last_enemy.get("wood_wagon", false)):
+		_wood_wagon_reward_handled = false
+		await _transition_to_next_enemy()
+		await set_turn(Turn.PLAYER)
 		return
 	var gained_xp := 15
 	var killed_name := "???"
@@ -1519,8 +1833,8 @@ func _on_enemy_defeated() -> void:
 	else:
 		push_warning("last_enemy snapshot empty; using fallback XP=%d" % gained_xp)
 	player.add_xp(gained_xp)
-	if lbl_log:
-		lbl_log.text = "Enemy defeated! +%d XP" % gained_xp
+	show_damage_popup(player, "+%d XP" % gained_xp, "xp")
+	combat_log("Enemy defeated! +%d XP" % gained_xp)
 	_try_drop_potion()
 		# PRÓBA DROPu ITEMU
 	_roll_enemy_loot_drop(last_enemy)
@@ -1537,7 +1851,7 @@ func _on_enemy_defeated() -> void:
 
 
 	await _transition_to_next_enemy()
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
 
 func _try_upgrade_weapon_on_boss_kill(enemy_data: Dictionary) -> void:
 	# Upgrade rule: weapon used to kill boss upgrades by +1 tier (in-place)
@@ -1718,7 +2032,7 @@ func _on_player_died() -> void:
 		lbl_player_dmg_value.text = "0"
 	if lbl_player_armor_value:
 		lbl_player_armor_value.text = str(_calc_player_armor_total())
-	lbl_log.text = "Game Over."
+	combat_log("Game Over.")
 	if btn_attack:
 		btn_attack.disabled = true
  
@@ -1906,6 +2220,8 @@ func _make_styled_button(label_text: String, col: Color) -> Button:
 func _update_labels() -> void:
 	_on_player_hp_changed(player.hp, player.max_hp)
 	_on_enemy_hp_changed(enemy.hp, enemy.max_hp)
+	if _status_effects:
+		_status_effects.sync_marker_positions(player, enemy)
 
 func show_damage_popup(target: Node2D, text: String, kind: String = "hit") -> void:
 	_FLOATING_DAMAGE_NUMBERS.spawn(fx_root, cam, target, text, kind, DMG_FONT)
@@ -1943,7 +2259,7 @@ func _worst_enemy_hit_damage() -> int:
 func _should_show_near_death_warning() -> bool:
 	if is_in_home or not player.is_alive() or not enemy.is_alive():
 		return false
-	if bool(current_enemy_data.get("treasure", false)):
+	if _is_noncombat_encounter():
 		return false
 	if inventory_screen != null and inventory_screen.visible:
 		return false
@@ -1977,10 +2293,38 @@ func _on_player_level_changed(level: int, stat_points_now: int) -> void:
 		t.tween_interval(0.05)
 		t.tween_property(xp_bar, "modulate", original_modulate, 0.2)
 	if not has_evolved and level >= EVOLVE_LEVEL:
-		_show_evolution_choice()
+		_request_evolution_choice()
 	# Do not auto-open stats panel on level up.
 	# Player spends points from Inventory; we only nudge via the unspent indicator.
 	_update_unspent_points_indicator(stat_points_now)
+	_queue_level_up_banner(level)
+
+
+func _queue_level_up_banner(level: int) -> void:
+	if not _level_banner_ready:
+		return
+	if level <= _level_banner_seen:
+		return
+	_level_banner_pending = level
+	if _level_banner_queued:
+		return
+	_level_banner_queued = true
+	call_deferred("_flush_level_up_banner")
+
+
+func _flush_level_up_banner() -> void:
+	_level_banner_queued = false
+	if not _level_banner_ready:
+		return
+	if _level_banner_pending <= _level_banner_seen:
+		return
+	var gained := _level_banner_pending - _level_banner_seen
+	_level_banner_seen = _level_banner_pending
+	var parent := _ui_root()
+	var title := "LEVEL UP" if gained == 1 else "LEVEL UP  ×%d" % gained
+	var body := "You are now level %d" % _level_banner_seen
+	var sub := "+%d Stat Points" % (gained * 3)
+	_GAME_BANNER_TOAST.show(parent, title, body, sub, Color(0.95, 0.82, 0.30, 1.0), 2.4, DMG_FONT)
 
 func _cache_default_dice_set() -> void:
 	_dice.cache_default_dice_set()
@@ -2059,14 +2403,13 @@ func _switch_to_dungeon(idx:int) -> void:
 		visited_dungeons.append(idx)
 		GameState.meta["visited_dungeons"] = visited_dungeons.duplicate()
 
-	if lbl_log:
-		lbl_log.text = "Entering: %s" % String(DUNGEONS[idx]["name"])
+	combat_log("Entering: %s" % String(DUNGEONS[idx]["name"]))
 	
 	if lbl_dungeon_name:
 		lbl_dungeon_name.text = "Current dungeon: %s" % String(DUNGEONS[current_dungeon_index]["name"])
 
 	_request_spawn(_pick_enemy())
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
 
 
 
@@ -2163,6 +2506,83 @@ func _update_unspent_points_indicator(points: int) -> void:
 		_unspent_pulse_tween.tween_property(unspent_points_label, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		_unspent_pulse_tween.parallel().tween_property(unspent_points_label, "modulate:a", 0.75, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
+# --- WOOD HUD ---
+func _wood_texture() -> Texture2D:
+	if _tex_wood != null:
+		return _tex_wood
+	var path := "res://resources/wood.png"
+	if ResourceLoader.exists(path):
+		_tex_wood = load(path) as Texture2D
+	return _tex_wood
+
+
+func _setup_wood_hud() -> void:
+	var ui_root := get_node_or_null("CanvasLayer/UIRoot") as Control
+	if ui_root == null:
+		return
+	if _wood_hud != null and is_instance_valid(_wood_hud):
+		_update_wood_ui()
+		return
+
+	_wood_hud = Control.new()
+	_wood_hud.name = "WoodHUD"
+	_wood_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wood_hud.z_index = 40
+	_wood_hud.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_wood_hud.anchor_left = 0.0
+	_wood_hud.anchor_right = 0.0
+	_wood_hud.anchor_top = 1.0
+	_wood_hud.anchor_bottom = 1.0
+	_wood_hud.offset_left = 36.0
+	_wood_hud.offset_right = 180.0
+	_wood_hud.offset_top = -118.0
+	_wood_hud.offset_bottom = -36.0
+	ui_root.add_child(_wood_hud)
+
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.set_anchors_preset(Control.PRESET_FULL_RECT)
+	row.add_theme_constant_override("separation", 8)
+	row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	_wood_hud.add_child(row)
+
+	_wood_icon = TextureRect.new()
+	_wood_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wood_icon.texture = _wood_texture()
+	_wood_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_wood_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_wood_icon.custom_minimum_size = Vector2(52, 52)
+	row.add_child(_wood_icon)
+
+	_wood_count_lbl = Label.new()
+	_wood_count_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wood_count_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_wood_count_lbl.add_theme_font_size_override("font_size", 22)
+	_wood_count_lbl.add_theme_color_override("font_color", Color(0.92, 0.84, 0.62, 1.0))
+	_wood_count_lbl.add_theme_color_override("font_outline_color", Color(0.08, 0.05, 0.02, 0.95))
+	_wood_count_lbl.add_theme_constant_override("outline_size", 4)
+	if DMG_FONT:
+		_wood_count_lbl.add_theme_font_override("font", DMG_FONT)
+	row.add_child(_wood_count_lbl)
+
+	_update_wood_ui()
+
+
+func _update_wood_ui() -> void:
+	if _wood_count_lbl == null or not is_instance_valid(_wood_count_lbl):
+		return
+	_wood_count_lbl.text = str(maxi(0, wood))
+	if _wood_hud and is_instance_valid(_wood_hud):
+		_wood_hud.visible = true
+
+
+func add_wood(amount: int) -> void:
+	if amount == 0:
+		return
+	wood = maxi(0, wood + amount)
+	_update_wood_ui()
+
+
 # --- POTIONS: UI i logika ---
 func _update_potions_ui() -> void:
 	if potion_label:
@@ -2194,7 +2614,7 @@ func _update_potions_ui() -> void:
 					tb.texture_normal = TEX_HP_BOTTLE_2
 				_:
 					tb.texture_normal = TEX_HP_BOTTLE_3
-	var can_use: bool = (turn == Turn.PLAYER) and (potions > 0) and (player.hp < player.max_hp)
+	var can_use: bool = (turn == Turn.PLAYER) and not resolving_turn and (potions > 0) and (player.hp < player.max_hp)
 	if btn_use_potion:
 		btn_use_potion.disabled = not can_use
 
@@ -2236,7 +2656,7 @@ func _use_potion() -> void:
 	await get_tree().create_timer(0.25).timeout
 
 	if was_player_turn and player.is_alive() and enemy.is_alive():
-		set_turn(Turn.ENEMY)
+		await set_turn(Turn.ENEMY)
 	else:
 		if turn == Turn.PLAYER and btn_attack:
 			btn_attack.disabled = false
@@ -2249,8 +2669,9 @@ func _try_drop_potion() -> void:
 	if randf() <= POTION_DROP_CHANCE:
 		potions += 1
 		_update_potions_ui()
-		if lbl_log:
-			lbl_log.text = "You found a Health Potion! (%d/%d)" % [potions, POTION_MAX]
+		if GameAudio:
+			GameAudio.play_potion_pickup()
+		combat_log("You found a Health Potion! (%d/%d)" % [potions, POTION_MAX])
 		show_damage_popup(player, "+Potion", "heal")
 
 func play_heal_flash() -> void:
@@ -2325,7 +2746,7 @@ func _on_dungeon_choice_confirmed() -> void:
 
 func _on_dungeon_choice_canceled() -> void:
 	await _transition_to_next_enemy()
-	set_turn(Turn.PLAYER)
+	await set_turn(Turn.PLAYER)
 
 func _switch_to_next_dungeon() -> void:
 	if current_dungeon_index == 0:
@@ -2338,8 +2759,7 @@ func _switch_to_next_dungeon() -> void:
 		if not visited_dungeons.has(1):
 			visited_dungeons.append(1)
 
-		if lbl_log:
-			lbl_log.text = "Entering: Undead Crypt"
+		combat_log("Entering: Undead Crypt")
 
 		# zaktualizuj pasek „Current dungeon: …”
 		if lbl_dungeon_name:
@@ -2347,124 +2767,521 @@ func _switch_to_next_dungeon() -> void:
 
 		_apply_world_background_for_current_dungeon()
 		_request_spawn(_pick_enemy())
-		set_turn(Turn.PLAYER)
+		await set_turn(Turn.PLAYER)
 	else:
 		# dalej nie używamy tego przejścia — od D2 decyduje _offer_branch_choice_after_boss()
-		if lbl_log:
-			lbl_log.text = "No further dungeons via linear path. Stay here."
+		combat_log("No further dungeons via linear path. Stay here.")
 		_request_spawn(_pick_enemy())
-		set_turn(Turn.PLAYER)
+		await set_turn(Turn.PLAYER)
 
 
 # --- Evolution UI ---
+func _request_evolution_choice() -> void:
+	if has_evolved or _is_evolution_choice_open():
+		return
+	if GameState.has_class():
+		_apply_class_evolution(GameState.get_chosen_class())
+		return
+	if _dev_panel_visible:
+		_evolution_pending = true
+		return
+	_show_evolution_choice()
+
+
 func _show_evolution_choice() -> void:
 	if GameState.has_class():
 		_apply_class_evolution(GameState.get_chosen_class())
 		return
+	if _is_evolution_choice_open():
+		return
+	_evolution_pending = false
+	_dismiss_evolution_overlay()
 	if btn_attack:
 		btn_attack.disabled = true
-	var win := Window.new()
-	win.title = "Dwarf Evolution"
-	win.unresizable = true
-	win.size = Vector2i(520, 360)
+	_evolution_ready = false
+	_suppress_ui_for_evolution()
 
-	var root := VBoxContainer.new()
-	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_theme_constant_override("separation", 16)
+	var vp := get_viewport_rect().size
+	var row_sep := clampi(int(vp.x * 0.018), 10, 28)
+	var usable_w := vp.x - 80.0
+	var char_w := clampf((usable_w - float(row_sep) * 3.0) / 4.0, 130.0, 220.0)
+	var char_h := clampf(char_w * 1.35, 220.0, minf(vp.y * 0.48, 420.0))
+
+	_evolution_overlay = Control.new()
+	_evolution_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_evolution_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_evolution_overlay.z_index = 600
+
+	_evolution_dim = ColorRect.new()
+	_evolution_dim.color = Color(0.0, 0.0, 0.0, 0.0)
+	_evolution_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_evolution_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_evolution_overlay.add_child(_evolution_dim)
+
+	_evolution_title_host = Control.new()
+	_evolution_title_host.set_anchors_preset(Control.PRESET_CENTER)
+	_evolution_title_host.custom_minimum_size = Vector2(minf(vp.x * 0.8, 720.0), 72.0)
+	_evolution_title_host.offset_left = -_evolution_title_host.custom_minimum_size.x * 0.5
+	_evolution_title_host.offset_right = _evolution_title_host.custom_minimum_size.x * 0.5
+	_evolution_title_host.offset_top = -36.0
+	_evolution_title_host.offset_bottom = 36.0
+	_evolution_title_host.modulate.a = 0.0
+	_evolution_title_host.scale = Vector2(0.55, 0.55)
+	_evolution_overlay.add_child(_evolution_title_host)
 
 	var head := Label.new()
-	head.text = "Choose your class (one-time evolution):"
+	head.name = "Title"
+	head.text = "CHOOSE YOUR PATH"
 	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	head.add_theme_font_size_override("font_size", 22)
+	head.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	head.set_anchors_preset(Control.PRESET_FULL_RECT)
+	head.add_theme_font_size_override("font_size", 34)
+	head.add_theme_color_override("font_color", Color(0.92, 0.78, 0.28))
 	if DMG_FONT:
 		head.add_theme_font_override("font", DMG_FONT)
-	root.add_child(head)
+	_evolution_title_host.add_child(head)
 
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(grid)
+	_evolution_content = Control.new()
+	_evolution_content.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_evolution_content.modulate.a = 0.0
+	_evolution_content.mouse_filter = Control.MOUSE_FILTER_PASS
+	_evolution_overlay.add_child(_evolution_content)
 
-	grid.add_child(_make_class_card(
-		"warrior",
-		"Warrior (+10 STR)",
-		"Iron master of the sword. Strong bonus to strength-based weapons."
-	))
-	grid.add_child(_make_class_card(
-		"assassin",
-		"Assassin (+10 AGI)",
-		"Fast and precise. Excels with agility-scaling weapons."
-	))
-	grid.add_child(_make_class_card(
-		"guardian",
-		"Guardian (+10 VIT)",
-		"Unbreakable defense. Greatly improved survivability."
-	))
-	grid.add_child(_make_class_card(
-		"barbarian",
-		"Barbarian (+10 CRIT)",
-		"Uncontrolled fury. Massive critical hit power."
-	))
+	var hint := Label.new()
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	hint.offset_top = clampf(vp.y * 0.11, 52.0, 88.0)
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color(0.62, 0.58, 0.52))
+	if DMG_FONT:
+		hint.add_theme_font_override("font", DMG_FONT)
+	_evolution_content.add_child(hint)
+	_evolution_hint_label = hint
 
-	win.add_child(root)
+	_evolution_tooltip = _make_evolution_info_box()
+	_evolution_tooltip.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_evolution_tooltip.offset_left = clampf(vp.x * 0.12, 80.0, 200.0)
+	_evolution_tooltip.offset_right = -_evolution_tooltip.offset_left
+	_evolution_tooltip.offset_top = hint.offset_top + 26.0
+	_evolution_content.add_child(_evolution_tooltip)
+
+	var char_area := CenterContainer.new()
+	char_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	char_area.set_anchors_preset(Control.PRESET_FULL_RECT)
+	char_area.offset_top = hint.offset_top + 118.0
+	char_area.offset_bottom = -80.0
+	_evolution_content.add_child(char_area)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", row_sep)
+	char_area.add_child(row)
 
 	var layer := $CanvasLayer
 	if layer:
-		layer.add_child(win)
+		layer.add_child(_evolution_overlay)
+		_set_process_mode_recursive(_evolution_overlay, Node.PROCESS_MODE_ALWAYS)
+		_evolution_particles_root = Node2D.new()
+		_evolution_particles_root.z_index = 601
+		_evolution_particles_root.process_mode = Node.PROCESS_MODE_ALWAYS
+		layer.add_child(_evolution_particles_root)
 	else:
-		add_child(win)
-	win.popup_centered()
-	win.show()
-	win.grab_focus()
+		add_child(_evolution_overlay)
+		_set_process_mode_recursive(_evolution_overlay, Node.PROCESS_MODE_ALWAYS)
+		_evolution_particles_root = null
 
-func _make_class_card(key: String, title: String, desc: String) -> Control:
-	var card := VBoxContainer.new()
-	card.add_theme_constant_override("separation", 6)
-	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	for class_key in ["warrior", "assassin", "guardian", "barbarian"]:
+		var slot := _make_evolution_character_slot(class_key, Vector2(char_w, char_h))
+		slot.modulate.a = 0.0
+		row.add_child(slot)
+		_evolution_slot_nodes[class_key] = slot
+		var info: Dictionary = CLASS_EVOLUTION_INFO.get(class_key, {})
+		var accent: Color = info.get("accent", Color(0.9, 0.8, 0.3))
+		if _evolution_particles_root:
+			var particles := _make_evolution_hover_particles(accent)
+			_evolution_particles_root.add_child(particles)
+			_evolution_particles[class_key] = particles
 
-	var ltitle := Label.new()
-	ltitle.text = title
-	ltitle.add_theme_font_size_override("font_size", 20)
+	call_deferred("_play_evolution_intro")
+	get_tree().create_timer(4.0, true).timeout.connect(_force_evolution_intro_finish, CONNECT_ONE_SHOT)
+
+
+func _is_evolution_choice_open() -> bool:
+	return _evolution_overlay != null and is_instance_valid(_evolution_overlay)
+
+
+func _play_evolution_intro() -> void:
+	if _evolution_overlay == null or not is_instance_valid(_evolution_overlay):
+		return
+	if _evolution_title_host == null or _evolution_content == null:
+		return
+
+	await get_tree().process_frame
+	if _evolution_title_host:
+		_evolution_title_host.pivot_offset = _evolution_title_host.size * 0.5
+
+	var tw := get_tree().create_tween()
+	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	tw.set_parallel(true)
+	if _evolution_dim:
+		tw.tween_method(
+			func(a: float) -> void:
+				if _evolution_dim and is_instance_valid(_evolution_dim):
+					_evolution_dim.color = Color(0.0, 0.0, 0.0, a),
+			0.0, 0.94, 0.55
+		)
+	tw.tween_property(_evolution_title_host, "modulate:a", 1.0, 0.75)\
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(_evolution_title_host, "scale", Vector2.ONE, 0.85)\
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+	await tw.finished
+	await get_tree().create_timer(0.55, true).timeout
+	if _evolution_overlay == null or not is_instance_valid(_evolution_overlay):
+		return
+
+	var vp := get_viewport_rect().size
+	var center_y := vp.y * 0.5
+	var target_top := clampf(vp.y * 0.06, 36.0, 56.0)
+	_evolution_title_host.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_evolution_title_host.offset_left = 0.0
+	_evolution_title_host.offset_right = 0.0
+	_evolution_title_host.offset_top = center_y - 36.0
+	_evolution_title_host.offset_bottom = -(vp.y - (center_y + 36.0))
+
+	var title_tw := get_tree().create_tween()
+	title_tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	title_tw.set_parallel(true)
+	title_tw.tween_property(_evolution_title_host, "scale", Vector2(0.68, 0.68), 0.45)\
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	title_tw.tween_property(_evolution_title_host, "offset_top", target_top, 0.45)\
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	title_tw.tween_property(_evolution_title_host, "offset_bottom", -(vp.y - (target_top + 52.0)), 0.45)\
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	title_tw.tween_property(_evolution_content, "modulate:a", 1.0, 0.42)\
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+	await title_tw.finished
+	if _evolution_overlay == null or not is_instance_valid(_evolution_overlay):
+		return
+
+	var idx := 0
+	for class_key in ["warrior", "assassin", "guardian", "barbarian"]:
+		var slot: Control = _evolution_slot_nodes.get(class_key)
+		if slot == null or not is_instance_valid(slot):
+			continue
+		var slot_tw := get_tree().create_tween()
+		slot_tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+		slot_tw.tween_property(slot, "modulate:a", 1.0, 0.32)\
+			.set_delay(float(idx) * 0.08)\
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		idx += 1
+
+	_evolution_ready = true
+	_layout_evolution_tooltip()
+
+
+func _force_evolution_intro_finish() -> void:
+	if _evolution_ready or not _is_evolution_choice_open():
+		return
+	if _evolution_dim and is_instance_valid(_evolution_dim):
+		_evolution_dim.color = Color(0.0, 0.0, 0.0, 0.94)
+	if _evolution_title_host and is_instance_valid(_evolution_title_host):
+		_evolution_title_host.modulate.a = 1.0
+		_evolution_title_host.scale = Vector2(0.68, 0.68)
+	if _evolution_content and is_instance_valid(_evolution_content):
+		_evolution_content.modulate.a = 1.0
+	for class_key in _evolution_slot_nodes.keys():
+		var slot: Control = _evolution_slot_nodes.get(class_key)
+		if slot and is_instance_valid(slot):
+			slot.modulate.a = 1.0
+	_evolution_ready = true
+	_layout_evolution_tooltip()
+
+
+func _suppress_ui_for_evolution() -> void:
+	_evolution_suppressed_ui.clear()
+	for n in [lbl_dungeon_name, unspent_points_label]:
+		if n and is_instance_valid(n) and n is CanvasItem:
+			_evolution_suppressed_ui.append({"node": n, "visible": (n as CanvasItem).visible})
+			(n as CanvasItem).visible = false
+	_set_attack_buttons_disabled(true)
+
+
+func _restore_ui_after_evolution() -> void:
+	for entry in _evolution_suppressed_ui:
+		var n: CanvasItem = entry.get("node")
+		if n and is_instance_valid(n):
+			n.visible = bool(entry.get("visible", true))
+	_evolution_suppressed_ui.clear()
+	if turn == Turn.PLAYER:
+		_set_attack_buttons_disabled(false)
+
+
+func _make_evolution_character_slot(class_key: String, portrait_size: Vector2) -> Control:
+	var info: Dictionary = CLASS_EVOLUTION_INFO.get(class_key, {})
+	var slot := Control.new()
+	slot.custom_minimum_size = portrait_size + Vector2(0, 24)
+	slot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	slot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	slot.mouse_filter = Control.MOUSE_FILTER_STOP
+
+	var tex := TextureRect.new()
+	tex.name = "Portrait"
+	tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tex.custom_minimum_size = portrait_size
+	tex.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	tex.offset_top = 0.0
+	tex.offset_bottom = portrait_size.y
+	tex.offset_left = -portrait_size.x * 0.5
+	tex.offset_right = portrait_size.x * 0.5
+	tex.pivot_offset = portrait_size * 0.5
+	var tex_path: String = String(CLASS_TEXTURES.get(class_key, ""))
+	if tex_path != "" and ResourceLoader.exists(tex_path):
+		tex.texture = load(tex_path) as Texture2D
+	slot.add_child(tex)
+
+	var name_lbl := Label.new()
+	name_lbl.text = String(info.get("name", class_key.capitalize()))
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_lbl.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	name_lbl.offset_top = -20.0
+	name_lbl.add_theme_font_size_override("font_size", 14)
+	name_lbl.add_theme_color_override("font_color", Color(0.72, 0.68, 0.62))
 	if DMG_FONT:
-		ltitle.add_theme_font_override("font", DMG_FONT)
-	card.add_child(ltitle)
+		name_lbl.add_theme_font_override("font", DMG_FONT)
+	slot.add_child(name_lbl)
 
-	var ldesc := Label.new()
-	ldesc.text = desc
-	ldesc.autowrap_mode = TextServer.AUTOWRAP_WORD
-	card.add_child(ldesc)
+	slot.mouse_entered.connect(Callable(self, "_on_evolution_slot_hovered").bind(class_key))
+	slot.mouse_exited.connect(Callable(self, "_on_evolution_slot_unhovered").bind(class_key))
+	slot.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			_on_class_picked(class_key)
+	)
+	return slot
 
-	var btn := Button.new()
-	btn.text = "Select"
-	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.pressed.connect(Callable(self, "_on_class_picked").bind(key))
-	card.add_child(btn)
 
-	return card
+func _make_evolution_info_box() -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.name = "EvolutionInfoBox"
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.visible = false
+	box.add_theme_constant_override("separation", 4)
+
+	var title := Label.new()
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color(0.92, 0.78, 0.28))
+	if DMG_FONT:
+		title.add_theme_font_override("font", DMG_FONT)
+	box.add_child(title)
+
+	var tag := Label.new()
+	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tag.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tag.add_theme_font_size_override("font_size", 13)
+	tag.add_theme_color_override("font_color", Color(0.72, 0.68, 0.62))
+	if DMG_FONT:
+		tag.add_theme_font_override("font", DMG_FONT)
+	box.add_child(tag)
+
+	var active := Label.new()
+	active.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	active.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	active.add_theme_font_size_override("font_size", 12)
+	active.add_theme_color_override("font_color", Color(0.88, 0.84, 0.78))
+	if DMG_FONT:
+		active.add_theme_font_override("font", DMG_FONT)
+	box.add_child(active)
+
+	var passive := Label.new()
+	passive.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	passive.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	passive.add_theme_font_size_override("font_size", 12)
+	passive.add_theme_color_override("font_color", Color(0.58, 0.74, 0.92))
+	if DMG_FONT:
+		passive.add_theme_font_override("font", DMG_FONT)
+	box.add_child(passive)
+
+	box.set_meta("lbl_title", title)
+	box.set_meta("lbl_tagline", tag)
+	box.set_meta("lbl_active", active)
+	box.set_meta("lbl_passive", passive)
+	return box
+
+
+func _layout_evolution_tooltip() -> void:
+	pass
+
+
+func _evolution_slot_center(class_key: String) -> Vector2:
+	var slot: Control = _evolution_slot_nodes.get(class_key)
+	if slot == null or not is_instance_valid(slot):
+		return Vector2.ZERO
+	var tex: TextureRect = slot.get_node_or_null("Portrait") as TextureRect
+	if tex:
+		return tex.get_global_rect().get_center()
+	return slot.get_global_rect().get_center()
+
+
+func _make_evolution_hover_particles(accent: Color) -> GPUParticles2D:
+	var p := GPUParticles2D.new()
+	p.emitting = false
+	p.one_shot = false
+	p.amount = 28
+	p.lifetime = 1.1
+	p.explosiveness = 0.0
+	p.preprocess = 0.4
+	p.z_index = 2
+
+	var mat := ParticleProcessMaterial.new()
+	mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	mat.emission_ring_radius = 88.0
+	mat.emission_ring_height = 14.0
+	mat.emission_ring_inner_radius = 0.55
+	mat.direction = Vector3(0, -1, 0)
+	mat.spread = 28.0
+	mat.initial_velocity_min = 6.0
+	mat.initial_velocity_max = 20.0
+	mat.gravity = Vector3(0, -8, 0)
+	mat.orbit_velocity_min = 0.6
+	mat.orbit_velocity_max = 1.4
+	mat.scale_min = 0.12
+	mat.scale_max = 0.38
+	mat.angular_velocity_min = -90.0
+	mat.angular_velocity_max = 90.0
+
+	var grad := Gradient.new()
+	grad.set_color(0, accent.lightened(0.25))
+	grad.add_point(0.55, Color(accent.r, accent.g, accent.b, 0.55))
+	grad.add_point(1.0, Color(accent.r, accent.g, accent.b, 0.0))
+	var grad_tex := GradientTexture1D.new()
+	grad_tex.gradient = grad
+	mat.color_ramp = grad_tex
+	p.process_material = mat
+	p.texture = _make_evolution_particle_tex()
+	return p
+
+
+func _make_evolution_particle_tex() -> Texture2D:
+	var img := Image.create(12, 12, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for x in 12:
+		for y in 12:
+			var dx := float(x) - 5.5
+			var dy := float(y) - 5.5
+			var a := clampf(1.0 - sqrt(dx * dx + dy * dy) / 5.5, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1, 1, 1, a * a))
+	return ImageTexture.create_from_image(img)
+
+
+func _on_evolution_slot_hovered(class_key: String) -> void:
+	if not _evolution_ready:
+		return
+	if _evolution_hovered_key == class_key:
+		return
+	_set_evolution_hover(_evolution_hovered_key, false)
+	_evolution_hovered_key = class_key
+	_set_evolution_hover(class_key, true)
+	_show_evolution_tooltip(class_key)
+
+
+func _on_evolution_slot_unhovered(class_key: String) -> void:
+	if _evolution_hovered_key != class_key:
+		return
+	_set_evolution_hover(class_key, false)
+	_evolution_hovered_key = ""
+	_hide_evolution_tooltip()
+
+
+func _set_evolution_hover(class_key: String, on: bool) -> void:
+	if class_key == "":
+		return
+	var slot: Control = _evolution_slot_nodes.get(class_key)
+	if slot and is_instance_valid(slot):
+		var tex: TextureRect = slot.get_node_or_null("Portrait") as TextureRect
+		if tex:
+			var tw := get_tree().create_tween()
+			tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+			tw.tween_property(tex, "scale", Vector2.ONE * (1.07 if on else 1.0), 0.16)
+			tw.parallel().tween_property(tex, "modulate", Color(1.12, 1.12, 1.12, 1.0) if on else Color.WHITE, 0.16)
+	var particles: GPUParticles2D = _evolution_particles.get(class_key)
+	if particles and is_instance_valid(particles):
+		if on:
+			particles.global_position = _evolution_slot_center(class_key)
+			particles.restart()
+			particles.emitting = true
+		else:
+			particles.emitting = false
+
+
+func _show_evolution_tooltip(class_key: String) -> void:
+	if _evolution_tooltip == null or not is_instance_valid(_evolution_tooltip):
+		return
+	var info: Dictionary = CLASS_EVOLUTION_INFO.get(class_key, {})
+	var title: Label = _evolution_tooltip.get_meta("lbl_title") as Label
+	var tag: Label = _evolution_tooltip.get_meta("lbl_tagline") as Label
+	var active: Label = _evolution_tooltip.get_meta("lbl_active") as Label
+	var passive: Label = _evolution_tooltip.get_meta("lbl_passive") as Label
+	if title:
+		title.text = String(info.get("name", class_key.capitalize()))
+	if tag:
+		tag.text = String(info.get("tagline", ""))
+	if active:
+		active.text = "Active — " + String(info.get("active", ""))
+	if passive:
+		passive.text = "Passive — " + String(info.get("passive", ""))
+	_evolution_tooltip.visible = true
+	if _evolution_hint_label and is_instance_valid(_evolution_hint_label):
+		_evolution_hint_label.visible = false
+
+
+func _hide_evolution_tooltip() -> void:
+	if _evolution_tooltip and is_instance_valid(_evolution_tooltip):
+		_evolution_tooltip.visible = false
+	if _evolution_hint_label and is_instance_valid(_evolution_hint_label):
+		_evolution_hint_label.visible = true
+
+
+func _dismiss_evolution_overlay() -> void:
+	var had_overlay := _evolution_overlay != null and is_instance_valid(_evolution_overlay)
+	_evolution_hovered_key = ""
+	_evolution_ready = false
+	_evolution_slot_nodes.clear()
+	_evolution_particles.clear()
+	_restore_ui_after_evolution()
+	_evolution_title_host = null
+	_evolution_content = null
+	_evolution_dim = null
+	if _evolution_particles_root and is_instance_valid(_evolution_particles_root):
+		_evolution_particles_root.queue_free()
+	_evolution_particles_root = null
+	_evolution_tooltip = null
+	_evolution_hint_label = null
+	_evolution_pending = false
+	if had_overlay:
+		_evolution_overlay.queue_free()
+	_evolution_overlay = null
+
 
 func _on_class_picked(class_key: String) -> void:
+	if not _evolution_ready:
+		return
 	if has_evolved:
 		return
 
 	_apply_class_evolution(class_key)
 
-	# posprzątaj okna
-	for child in $CanvasLayer.get_children():
-		if child is Window:
-			child.queue_free()
+	combat_log("Evolution complete! You are now a " + class_key.capitalize() + ".")
 
-	if lbl_log:
-		lbl_log.text = "Evolution complete! You are now a " + class_key.capitalize() + "."
-
-	# upewnij się, że hotbar skilli jest podłączony
 	if not skills_hotbar_wired:
 		_create_skills_ui()
 	_update_skills_ui()
 
-	# przywróć Attack jeśli można
 	if turn == Turn.PLAYER and btn_attack and (not inventory_screen or not inventory_screen.visible):
 		btn_attack.disabled = false
 
@@ -2473,45 +3290,21 @@ func _apply_class_evolution(key: String) -> void:
 	if has_evolved:
 		return
 
-	# premie do statów na ewolucji (jak było)
-	match key:
-		"warrior":
-			player.strength += 10
-		"assassin":
-			player.agility += 10
-		"guardian":
-			player.vitality += 10
-		"barbarian":
-			player.crit += 10
-		_:
-			push_warning("Unknown class key: %s" % key)
-
-	# zapamiętaj klasę
 	has_evolved = true
 	chosen_class = key
-		# Zapisz klasę permanentnie w meta
 	GameState.set_class(key)
 	GameState.save(GameState.current_slot)
 
-	# nadaj aktywne/pasywne skille dla klasy (slot [2] + pasywka)
 	_grant_class_skills(key)
-
-	# odśwież UI statystyk i panel skilli
 	_on_player_stats_changed(player.strength, player.agility, player.vitality, player.crit, player.stat_points)
 	_update_skills_ui()
 
-	# zamknij okno wyboru
-	for child in $CanvasLayer.get_children():
-		if child is Window:
-			child.queue_free()
+	_dismiss_evolution_overlay()
 
-	# fajerwerki i komunikat
-	if lbl_log:
-		lbl_log.text = "Evolution complete! You are now a " + key.capitalize() + "."
+	combat_log("Evolution complete! You are now a " + key.capitalize() + ".")
 	_animate_class_change(key)
 	_post_evolution_breath()
 
-	# odblokuj atak jeśli to Twoja tura i nic innego nie blokuje
 	if turn == Turn.PLAYER and btn_attack and (not inventory_screen or not inventory_screen.visible):
 		btn_attack.disabled = false
 
@@ -2650,13 +3443,13 @@ func _load_permanent_items_into_inventory() -> void:
 			"scale": {"str": 0.7, "agi": 0.2}
 		}
 		inventory["weapon"].append(rusty)
-		_equip_item("weapon", 0)
+		_equip_item("weapon", 0, false)
 		print("[INVENTORY] First run — equipped Rusty Sword")
 	else:
 		print("[INVENTORY] Loaded %d item(s) from GameState." % loaded)
 		for slot in GameState.EQUIPMENT_SLOT_KEYS:
 			if not inventory[slot].is_empty():
-				_equip_item(slot, 0)
+				_equip_item(slot, 0, false)
 
 
 func _inventory_item_line(it: Dictionary) -> String:
@@ -2725,19 +3518,27 @@ func _consume_weapon_equip_turn() -> void:
 		return
 	if not player.is_alive() or not enemy.is_alive():
 		return
-	if bool(current_enemy_data.get("treasure", false)):
+	if _is_noncombat_encounter():
 		return
-	if lbl_log:
-		lbl_log.text = "You swap weapons — your turn ends."
-	set_turn(Turn.ENEMY)
+	# Jedna sesja inventory = maksymalnie jedno zakończenie tury za swap broni.
+	if inventory_screen and inventory_screen.visible:
+		if _weapon_swap_turn_spent_this_inventory:
+			combat_log("Weapon swapped (turn already ended this inventory).")
+			return
+		_weapon_swap_turn_spent_this_inventory = true
+	resolving_turn = true
+	_set_attack_buttons_disabled(true)
+	combat_log("You swap weapons — your turn ends.")
+	await set_turn(Turn.ENEMY)
 	_tick_skill_cooldowns()
 
 
-func _equip_item(key:String, idx:int) -> void:
+func _equip_item(key:String, idx:int, play_sfx: bool = true) -> void:
 	var items: Array = inventory.get(key, [])
 	if idx < 0 or idx >= items.size():
 		return
 	var it: Dictionary = items[idx]
+	ArmorSetRules.ensure_armor_type(it)
 	var weapon_changed_in_combat := false
 
 	match key:
@@ -2775,6 +3576,9 @@ func _equip_item(key:String, idx:int) -> void:
 
 	_update_labels()
 	_sync_inventory_screen_if_open()
+
+	if play_sfx and GameAudio:
+		GameAudio.play_item_equip()
 
 	if weapon_changed_in_combat:
 		_consume_weapon_equip_turn()
@@ -2889,85 +3693,53 @@ func _rarity_name(r:int) -> String:
 
 func _add_item_to_inventory(it:Dictionary) -> Dictionary:
 	var t := str(it.get("type",""))
+	var ref: Dictionary = {}
 	match t:
 		"weapon":
 			inventory["weapon"].append(it)
-			return {"key":"weapon","index":inventory["weapon"].size()-1}
+			ref = {"key":"weapon","index":inventory["weapon"].size()-1}
 		"armor":
 			inventory["armor"].append(it)
-			return {"key":"armor","index":inventory["armor"].size()-1}
+			ref = {"key":"armor","index":inventory["armor"].size()-1}
 		"helmet":
 			inventory["helmet"].append(it)
-			return {"key":"helmet","index":inventory["helmet"].size()-1}
+			ref = {"key":"helmet","index":inventory["helmet"].size()-1}
 		"necklace":
 			inventory["necklace"].append(it)
-			return {"key":"necklace","index":inventory["necklace"].size()-1}
+			ref = {"key":"necklace","index":inventory["necklace"].size()-1}
 		"gloves":
 			inventory["gloves"].append(it)
-			return {"key":"gloves","index":inventory["gloves"].size()-1}
+			ref = {"key":"gloves","index":inventory["gloves"].size()-1}
 		"boots":
 			inventory["boots"].append(it)
-			return {"key":"boots","index":inventory["boots"].size()-1}
+			ref = {"key":"boots","index":inventory["boots"].size()-1}
 		"ring1":
 			inventory["ring1"].append(it)
-			return {"key":"ring1","index":inventory["ring1"].size()-1}
+			ref = {"key":"ring1","index":inventory["ring1"].size()-1}
 		"ring2":
 			inventory["ring2"].append(it)
-			return {"key":"ring2","index":inventory["ring2"].size()-1}
+			ref = {"key":"ring2","index":inventory["ring2"].size()-1}
 		_:
-			return {}
+			ref = {}
+	if not ref.is_empty() and GameAudio:
+		GameAudio.play_item_pickup()
+	return ref
 
 func _show_loot_toast(item: Dictionary) -> void:
-	if not $CanvasLayer:
-		return
-	var rar:int = int(item.get("rarity", Rarity.COMMON))
+	var rar: int = int(item.get("rarity", Rarity.COMMON))
+	var item_name := String(item.get("name", "???"))
+	var body := "%s  ·  %s" % [item_name, _rarity_name(rar)]
+	var sub := _item_banner_subtitle(item)
+	var accent: Color = RARITY_COLORS.get(rar, UI_COL["accent"])
+	_GAME_BANNER_TOAST.show(_ui_root(), "ITEM FOUND", body, sub, accent, 2.4, DMG_FONT)
 
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(520, 120)
-	panel.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	panel.offset_left = 60
-	panel.offset_right = -60
-	panel.offset_top = 60
-	panel.offset_bottom = 180
-	panel.z_index = 450
-	$CanvasLayer.add_child(panel)
 
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 6)
-	panel.add_child(root)
-
-	var hdr := Label.new()
-	hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hdr.text = "ITEM FOUND"
-	hdr.add_theme_font_size_override("font_size", 18)
-	hdr.modulate = UI_COL["accent"]
-	if DMG_FONT: hdr.add_theme_font_override("font", DMG_FONT)
-	root.add_child(hdr)
-
-	var name := Label.new()
-	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name.text = "%s  (%s)" % [String(item.get("name","???")), _rarity_name(rar)]
-	name.add_theme_font_size_override("font_size", 20)
-	name.modulate = RARITY_COLORS.get(rar, Color.WHITE)
-	if DMG_FONT: name.add_theme_font_override("font", DMG_FONT)
-	root.add_child(name)
-
-	var stats := Label.new()
-	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	stats.text = _inventory_item_line(item)
-	root.add_child(stats)
-
-	panel.modulate.a = 0.0
-	panel.position.y -= 10
-	var tw := get_tree().create_tween()
-	tw.tween_property(panel, "modulate:a", 1.0, 0.16).from(0.0)
-	tw.parallel().tween_property(panel, "position:y", panel.position.y + 10, 0.16)
-	tw.tween_interval(1.8)
-	tw.tween_property(panel, "modulate:a", 0.0, 0.18)
-	tw.finished.connect(func():
-		if is_instance_valid(panel):
-			panel.queue_free()
-	)
+func _item_banner_subtitle(item: Dictionary) -> String:
+	var line := _inventory_item_line(item)
+	var item_name := str(item.get("name", "???"))
+	if line.begins_with(item_name):
+		line = line.substr(item_name.length()).strip_edges()
+	return line
 
 
 func _roll_enemy_loot_drop(enemy_data: Dictionary) -> void:
@@ -3002,14 +3774,11 @@ func _roll_enemy_loot_drop(enemy_data: Dictionary) -> void:
 	var item := _gen_random_item(slot_key, rarity, diff)
 	var ref := _add_item_to_inventory(item)
 
-	# log + zielony popup tekstowy (jak było) + NOWE okienko
-	if lbl_log:
-		lbl_log.text = "Loot: %s (%s)" % [str(item.get("name","???")), _rarity_name(int(item.get("rarity", Rarity.COMMON)))]
-	show_damage_popup(player, str(item.get("name","???")), "heal")
+	# log + jeden baner loot (bez floating damage — to dublowało napisy)
+	combat_log("Loot: %s (%s)" % [str(item.get("name","???")), _rarity_name(int(item.get("rarity", Rarity.COMMON)))])
 
 	_sync_inventory_screen_if_open()
 
-	# popup z przyciskiem "Equip now"
 	if not ref.is_empty():
 		_show_loot_toast(item)
 
@@ -3597,8 +4366,7 @@ func _try_use_skill(slot:int) -> void:
 
 	var cd: int = int(skill_cooldowns.get(slot, 0))
 	if cd > 0:
-		if lbl_log:
-			lbl_log.text = "%s is on cooldown (%d turns)." % [String(skills[slot].get("name","Skill")), cd]
+		combat_log("%s is on cooldown (%d turns)." % [String(skills[slot].get("name","Skill")), cd])
 		return
 
 	var skey := String(skills[slot].get("key",""))
@@ -3616,8 +4384,7 @@ func _try_use_skill(slot:int) -> void:
 		"weapon_skill":
 			await _use_weapon_skill(slot)
 		_:
-			if lbl_log:
-				lbl_log.text = "Skill not implemented yet."
+			combat_log("Skill not implemented yet.")
 
 	_update_skills_ui()
 
@@ -4003,357 +4770,76 @@ func _continue_run_after_event_async() -> void:
 		return
 	await _transition_to_next_enemy()
 
-func _ensure_shrine_dialog() -> void:
-	if shrine_dialog and is_instance_valid(shrine_dialog):
-		print("[SHRINE_DEBUG] Shrine dialog already exists.")
-		return
-
-	var parent_ctrl: Node = null
-	if has_node("CanvasLayer/UIRoot"):
-		parent_ctrl = $CanvasLayer/UIRoot
-	elif has_node("CanvasLayer"):
-		parent_ctrl = $CanvasLayer
-	else:
-		parent_ctrl = self
-
-	shrine_dialog = AcceptDialog.new()
-	shrine_dialog.title = "Sacred Shrine"
-	shrine_dialog.min_size = Vector2(680, 420)
-	shrine_dialog.dialog_hide_on_ok = false  # sami wołamy kontynuację
-
-	# layout
-	var header := VBoxContainer.new()
-	header.add_theme_constant_override("separation", 10)
-	shrine_dialog.add_child(header)
-
-	var title_lbl := Label.new()
-	title_lbl.text = "Choose an item to make PERMANENT"
-	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	header.add_child(title_lbl)
-
-	var body := HBoxContainer.new()
-	body.add_theme_constant_override("separation", 12)
-	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	body.size_flags_vertical   = Control.SIZE_EXPAND_FILL
-	header.add_child(body)
-
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical   = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size = Vector2(380, 0)
-	body.add_child(scroll)
-
-	shrine_list_box = VBoxContainer.new()
-	shrine_list_box.add_theme_constant_override("separation", 8)
-	scroll.add_child(shrine_list_box)
-
-	var preview_panel := PanelContainer.new()
-	preview_panel.custom_minimum_size = Vector2(260, 0)
-	preview_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_child(preview_panel)
-
-	var pvbox := VBoxContainer.new()
-	pvbox.add_theme_constant_override("separation", 8)
-	preview_panel.add_child(pvbox)
-
-	var ptitle := Label.new()
-	ptitle.text = "Preview"
-	ptitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	ptitle.add_theme_font_size_override("font_size", 18)
-	pvbox.add_child(ptitle)
-
-	shrine_preview = RichTextLabel.new()
-	shrine_preview.bbcode_enabled = true
-	shrine_preview.fit_content = false
-	shrine_preview.scroll_active = true
-	shrine_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	shrine_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	shrine_preview.text = "Hover an item to preview its stats."
-	pvbox.add_child(shrine_preview)
-
-	# przycisk wyjścia
-	shrine_dialog.add_button("Leave the Shrine", true, "leave")
-
-	# sygnały
-	shrine_dialog.canceled.connect(func():
-		_shrine_dialog_open = false
-		_shrine_in_progress = false
-		# opcjonalnie: jeśli chcesz cooldown także po „Leave”
-		if shrine_cooldown <= 0:
-			shrine_cooldown = 6           # ← ile walk pauzy po opuszczeniu bez wyboru
-		_continue_run_after_event()
-	)
-
-	shrine_dialog.custom_action.connect(func(action: String):
-		if action == "leave":
-			_shrine_dialog_open = false
-			_shrine_in_progress = false
-			if shrine_cooldown <= 0:
-				shrine_cooldown = 6       # j.w.
-			_continue_run_after_event()
-	)
-
-
-	print("[SHRINE_DEBUG] Creating new shrine_dialog under:", parent_ctrl.name)
-	parent_ctrl.call_deferred("add_child", shrine_dialog)
-
-
 func _open_shrine_dialog() -> void:
-	print("[SHRINE_DEBUG] Opening Shrine Dialog... (start)")
-	_ensure_shrine_dialog()
-
 	if not _has_any_items_in_inventory():
-		_shrine_dialog_open = false
+		_shrine_open = false
+		_shrine_in_progress = false
+		call_deferred("_continue_run_after_event")
+		return
+	if inventory_screen == null:
 		_shrine_in_progress = false
 		call_deferred("_continue_run_after_event")
 		return
 
-	_shrine_dialog_open = true
+	_shrine_open = true
 	_shrine_locked = false
-	_fill_shrine_dialog_items()
-	call_deferred("_popup_shrine_dialog")
+	inventory_screen.open_shrine(inventory, _inventory_ui_equipped(), _inventory_ui_stats())
+	_set_inventory_paused(true)
+	if _status_effects:
+		_status_effects.set_markers_layer_visible(false)
 
 
+func _on_shrine_item_confirmed(slot_key: String, idx: int) -> void:
+	_on_shrine_pick_permanent(slot_key, idx)
 
 
-func _popup_shrine_dialog() -> void:
-	if shrine_dialog and is_instance_valid(shrine_dialog):
-		print("[SHRINE_DEBUG] Popup shrine dialog centered")
-		shrine_dialog.popup_centered_ratio(0.6)
+func _on_shrine_closed() -> void:
+	_set_inventory_paused(false)
+	_shrine_open = false
+	_shrine_in_progress = false
+	if _status_effects:
+		_status_effects.set_markers_layer_visible(true)
+	if shrine_cooldown <= 0:
+		shrine_cooldown = 6
+	_continue_run_after_event()
 
 
-
-func _fill_shrine_dialog_items() -> void:
-	if not shrine_list_box:
-		return
-
-	# wipe
-	for c in shrine_list_box.get_children():
-		c.queue_free()
-
-	var keys: Array[String] = ["weapon","armor","helmet","necklace","gloves","boots","ring1","ring2"]
-	var any_added := false
-
-	for k in keys:
-		var arr: Array = inventory.get(k, []) as Array
-		if arr.is_empty():
-			continue
-
-		var head := Label.new()
-		head.text = k.to_upper()
-		head.add_theme_color_override("font_color", Color(1, 0.92, 0.60))
-		shrine_list_box.add_child(head)
-
-		for i in arr.size():
-			var it: Dictionary = arr[i]
-
-			var row := HBoxContainer.new()
-			row.add_theme_constant_override("separation", 10)
-			row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-			var lbl := Label.new()
-			var nm := str(it.get("name","?"))
-			var rar := _rarity_name(int(it.get("rarity", Rarity.COMMON)))
-			var eq := ""
-			if _is_item_equipped(k, i):
-				eq = " (equipped)"
-			lbl.text = "%s [%s]%s" % [nm, rar, eq]
-			lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			row.add_child(lbl)
-
-			var btn := Button.new()
-			btn.text = "Make Permanent"
-			btn.disabled = bool(it.get("permanent", false))
-			btn.pressed.connect(func(_k:=k, _idx:=i):
-				_open_shrine_confirm(_k, _idx)
-			)
-			row.add_child(btn)
-
-			# Preview on hover
-			var captured_k := k
-			var captured_idx := i
-			row.mouse_entered.connect(func():
-				_update_shrine_preview(captured_k, captured_idx)
-			)
-
-			shrine_list_box.add_child(row)
-			any_added = true
-
-	if not any_added:
-		var info := Label.new()
-		info.text = "(No items to choose)"
-		info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		shrine_list_box.add_child(info)
-	if shrine_preview:
-		shrine_preview.text = "Hover an item to preview its stats."
-
-func _update_shrine_preview(slot_key: String, idx: int) -> void:
-	if not shrine_preview:
-		return
-	var items: Array = inventory.get(slot_key, [])
-	if idx < 0 or idx >= items.size():
-		shrine_preview.text = ""
-		return
-	var it: Dictionary = items[idx]
-	shrine_preview.text = _shrine_item_details_bbcode(it, slot_key)
-
-func _shrine_item_details_bbcode(it: Dictionary, slot_key: String) -> String:
-	var rar := int(it.get("rarity", Rarity.COMMON))
-	var name := String(it.get("name", "?"))
-	var header := "[b]%s[/b]  [color=%s](%s)[/color]" % [_bb_escape(name), _bb_color_hex(RARITY_COLORS.get(rar, Color.WHITE)), _rarity_name(rar)]
-	var body := _bb_escape(_inventory_item_line(it))
-	if String(it.get("armor_type","")) != "":
-		body += "\nType: %s" % String(it.get("armor_type","")).capitalize()
-	if bool(it.get("permanent", false)):
-		body += "\n[color=#54D17A][b]PERMANENT[/b][/color]"
-	return header + "\n" + body
-
-func _bb_color_hex(c: Color) -> String:
-	return "%02x%02x%02x" % [int(c.r * 255.0), int(c.g * 255.0), int(c.b * 255.0)]
-
-func _bb_escape(s: String) -> String:
-	return s.replace("[", "\\[").replace("]", "\\]")
-
-func _open_shrine_confirm(slot_key: String, idx: int) -> void:
-	if _shrine_locked:
-		return
-	var items: Array = inventory.get(slot_key, [])
-	if idx < 0 or idx >= items.size():
-		return
-	var it: Dictionary = items[idx]
-	if bool(it.get("permanent", false)):
-		return
-
-	_shrine_pending_key = slot_key
-	_shrine_pending_idx = idx
-
-	# overlay
-	if _shrine_confirm_overlay and is_instance_valid(_shrine_confirm_overlay):
-		_shrine_confirm_overlay.queue_free()
-	if _shrine_confirm_panel and is_instance_valid(_shrine_confirm_panel):
-		_shrine_confirm_panel.queue_free()
-
-	_shrine_confirm_overlay = ColorRect.new()
-	_shrine_confirm_overlay.color = Color(0, 0, 0, 0.6)
-	_shrine_confirm_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_shrine_confirm_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	shrine_dialog.add_child(_shrine_confirm_overlay)
-
-	_shrine_confirm_panel = PanelContainer.new()
-	_shrine_confirm_panel.custom_minimum_size = Vector2(520, 260)
-	_shrine_confirm_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_shrine_confirm_panel.offset_left = -260
-	_shrine_confirm_panel.offset_right = 260
-	_shrine_confirm_panel.offset_top = -130
-	_shrine_confirm_panel.offset_bottom = 130
-	shrine_dialog.add_child(_shrine_confirm_panel)
-
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 10)
-	_shrine_confirm_panel.add_child(v)
-
-	var t := Label.new()
-	t.text = "Make this item PERMANENT?"
-	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	t.add_theme_font_size_override("font_size", 20)
-	v.add_child(t)
-
-	var rt := RichTextLabel.new()
-	rt.bbcode_enabled = true
-	rt.fit_content = false
-	rt.scroll_active = true
-	rt.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	rt.text = _shrine_item_details_bbcode(it, slot_key)
-	v.add_child(rt)
-
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 10)
-	v.add_child(row)
-
-	var ok := Button.new()
-	ok.text = "Confirm"
-	ok.pressed.connect(_confirm_shrine_permanent)
-	row.add_child(ok)
-
-	var cancel := Button.new()
-	cancel.text = "Cancel"
-	cancel.pressed.connect(_cancel_shrine_confirm)
-	row.add_child(cancel)
-
-	_shrine_confirm_panel.modulate.a = 0.0
-	_shrine_confirm_panel.scale = Vector2(1.05, 1.05)
-	var tw := get_tree().create_tween()
-	tw.tween_property(_shrine_confirm_panel, "modulate:a", 1.0, 0.12).from(0.0)
-	tw.parallel().tween_property(_shrine_confirm_panel, "scale", Vector2.ONE, 0.12).from(_shrine_confirm_panel.scale)
-
-func _cancel_shrine_confirm() -> void:
-	if _shrine_confirm_panel and is_instance_valid(_shrine_confirm_panel):
-		_shrine_confirm_panel.queue_free()
-	if _shrine_confirm_overlay and is_instance_valid(_shrine_confirm_overlay):
-		_shrine_confirm_overlay.queue_free()
-	_shrine_pending_key = ""
-	_shrine_pending_idx = -1
-
-func _confirm_shrine_permanent() -> void:
-	if _shrine_pending_key == "" or _shrine_pending_idx < 0:
-		_cancel_shrine_confirm()
-		return
-	_on_shrine_pick_permanent(_shrine_pending_key, _shrine_pending_idx)
-	_cancel_shrine_confirm()
-
-
-
-func _on_shrine_pick_permanent(slot_key:String, idx:int) -> void:
+func _on_shrine_pick_permanent(slot_key: String, idx: int) -> void:
 	if _shrine_locked:
 		return
 	_shrine_locked = true
-	
-	# blokujemy wszystkie przyciski w dialogu
-	for row in shrine_list_box.get_children():
-		for ch in row.get_children():
-			if ch is Button:
-				ch.disabled = true
-	
-	var items:Array = inventory.get(slot_key, [])
+
+	var items: Array = inventory.get(slot_key, [])
 	if idx < 0 or idx >= items.size():
-		_close_shrine_and_continue()
+		_finish_shrine_after_pick()
 		return
-	
-	var it:Dictionary = items[idx]
+
+	var it: Dictionary = items[idx]
 	if it.get("permanent", false):
-		_close_shrine_and_continue()
+		_finish_shrine_after_pick()
 		return
-	
-	# ZAPISUJEMY jako permanent (przez GameState.meta, żeby save() to uwzględnił)
+
 	GameState.make_permanent(slot_key, it)
-	
-	# oznaczamy w bieżącym runie
 	it["permanent"] = true
-	
+
 	_show_toast("Item '" + str(it.get("name", "?")) + "' is now PERMANENT!")
-	
-	# cooldown po udanym wyborze
-	shrine_cooldown = max(shrine_cooldown, 8)  # możesz zmienić na 6/10
-	
-	# odśwież UI
-	_sync_inventory_screen_if_open()
-	
-	# zamykamy i idziemy dalej
-	if shrine_dialog:
-		shrine_dialog.hide()
-	_shrine_dialog_open = false
+	shrine_cooldown = max(shrine_cooldown, 8)
+	_finish_shrine_after_pick()
+
+
+func _finish_shrine_after_pick() -> void:
+	_shrine_open = false
 	_shrine_in_progress = false
-	
+	_shrine_locked = false
+	if inventory_screen and inventory_screen.visible:
+		inventory_screen.shrine_mode = false
+		inventory_screen.visible = false
+		inventory_screen._apply_mode_ui()
+		inventory_screen._clear_shrine_offer()
+		inventory_screen.closed.emit()
+	_set_inventory_paused(false)
 	_continue_run_after_event()
 
-func _close_shrine_and_continue() -> void:
-	if shrine_dialog:
-		shrine_dialog.hide()
-	_shrine_dialog_open = false
-	_shrine_in_progress = false
-	_continue_run_after_event()
 
 func _has_any_items_in_inventory() -> bool:
 	for k in GameState.EQUIPMENT_SLOT_KEYS:
@@ -4378,7 +4864,7 @@ func _request_spawn(data: Dictionary) -> void:
 
 	if __is_shrine:
 		# już trwa? ignoruj kolejne zgłoszenia
-		if _shrine_in_progress or _shrine_dialog_open:
+		if _shrine_in_progress or _shrine_open:
 			print("[SHRINE_DEBUG] shrine request ignored (already in progress)")
 			return
 
@@ -4446,56 +4932,7 @@ func _ui_root() -> Node:
 
 
 func _show_toast(msg: String, duration: float = 1.5) -> void:
-	var parent := _ui_root()
-
-	var panel := PanelContainer.new()
-	panel.name = "ToastPanel"
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0, 0, 0, 0.75)
-	sb.border_color = Color(1, 1, 1, 0.20)
-	sb.border_width_left = 1
-	sb.border_width_right = 1
-	sb.border_width_top = 1
-	sb.border_width_bottom = 1
-	sb.corner_radius_top_left = 8
-	sb.corner_radius_top_right = 8
-	sb.corner_radius_bottom_left = 8
-	sb.corner_radius_bottom_right = 8
-	panel.add_theme_stylebox_override("panel", sb)
-	panel.z_index = 100
-
-	var pad := MarginContainer.new()
-	pad.add_theme_constant_override("margin_left", 16)
-	pad.add_theme_constant_override("margin_right", 16)
-	pad.add_theme_constant_override("margin_top", 10)
-	pad.add_theme_constant_override("margin_bottom", 10)
-
-	var lbl := Label.new()
-	lbl.text = msg
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_font_size_override("font_size", 18)
-	pad.add_child(lbl)
-	panel.add_child(pad)
-
-	# wycentruj – lekko nad środkiem
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.anchor_top = 0.35
-	panel.anchor_bottom = 0.35
-	panel.offset_left = -220
-	panel.offset_right = 220
-	panel.offset_top = -26
-	panel.offset_bottom = 26
-	panel.modulate = Color(1,1,1,0)
-
-	parent.add_child(panel)
-
-	var t := create_tween()
-	t.tween_property(panel, "modulate:a", 1.0, 0.15)
-	t.tween_interval(duration)
-	t.tween_property(panel, "modulate:a", 0.0, 0.25)
-	t.tween_callback(Callable(panel, "queue_free"))
+	_GAME_BANNER_TOAST.show(_ui_root(), "", msg, "", UI_COL["accent"], duration, DMG_FONT)
 
 func _go_to_home_test() -> void:
 	# opcjonalnie: szybkie potwierdzenie w konsoli
@@ -4564,6 +5001,7 @@ func _dev_create_panel() -> void:
 	vbox.add_child(_dev_section_label("EVENTY"))
 	vbox.add_child(_dev_btn("⚡ Wywołaj Shrine",    func(): _dev_trigger_shrine()))
 	vbox.add_child(_dev_btn("📦 Wywołaj Chest",     func(): _dev_trigger_chest()))
+	vbox.add_child(_dev_btn("🪵 Wywołaj Wood Wagon", func(): _dev_trigger_wood_wagon()))
 	vbox.add_child(_dev_btn("💀 Wywołaj bossa",     func(): _dev_spawn_boss()))
 	vbox.add_child(_dev_btn("🏠 Wróć do domu",      func(): _dev_goto_home()))
 
@@ -4575,6 +5013,12 @@ func _dev_create_panel() -> void:
 	vbox.add_child(_dev_btn("⬆ +1 poziom",         func(): _dev_add_level()))
 	vbox.add_child(_dev_btn("⬆⬆ +5 poziomów",      func(): _dev_add_levels(5)))
 	vbox.add_child(_dev_btn("🎒 Wypełnij inventory", func(): _dev_fill_inventory(); _sync_inventory_screen_if_open()))
+
+	vbox.add_child(_dev_separator())
+
+	# --- SEKCJA: KOMBAT ---
+	vbox.add_child(_dev_section_label("KOMBAT"))
+	vbox.add_child(_dev_btn("💥 Wymuś CRIT przeciwnika", func(): _dev_trigger_enemy_crit()))
 
 	vbox.add_child(_dev_separator())
 
@@ -4618,6 +5062,8 @@ func _dev_create_panel() -> void:
 func _dev_toggle_panel() -> void:
 	_dev_panel_visible = !_dev_panel_visible
 	_dev_panel.visible = _dev_panel_visible
+	if not _dev_panel_visible and _evolution_pending and not has_evolved:
+		call_deferred("_request_evolution_choice")
 
 
 # --- helpery UI ---
@@ -4679,7 +5125,7 @@ func _dev_spawn_boss() -> void:
 	_show_toast("💀 " + boss_name + " appears!", 1.5)
 
 func _dev_trigger_shrine() -> void:
-	if _shrine_in_progress or _shrine_dialog_open:
+	if _shrine_in_progress or _shrine_open:
 		_show_toast("Shrine is already running!", 1.0)
 		return
 	_dev_toggle_panel()
@@ -4689,11 +5135,51 @@ func _dev_trigger_chest() -> void:
 	_dev_toggle_panel()
 	_request_spawn(TREASURE_CHEST_DATA.duplicate(true))
 
+func _dev_trigger_wood_wagon() -> void:
+	_dev_toggle_panel()
+	_request_spawn(WOOD_WAGON_DATA.duplicate(true))
+
 func _dev_full_heal() -> void:
 	player.hp = player.max_hp
 	player.emit_signal("hp_changed", player.hp, player.max_hp)
 	show_damage_popup(player, "FULL HEAL", "heal")
 	_show_toast("Dwarf healed!", 1.0)
+
+
+func _dev_trigger_enemy_crit() -> void:
+	if _is_evolution_choice_open():
+		_show_toast("Close class choice first!", 1.5)
+		return
+	if not player.is_alive():
+		_show_toast("Player is dead!", 1.5)
+		return
+	if not enemy.is_alive():
+		_show_toast("No enemy to attack!", 1.5)
+		return
+	if bool(current_enemy_data.get("treasure", false)):
+		_show_toast("Chest does not attack!", 1.5)
+		return
+	if _is_wood_wagon_encounter():
+		_show_toast("Wood wagon does not attack!", 1.5)
+		return
+	if resolving_turn:
+		_show_toast("Wait for current action...", 1.2)
+		return
+	_dev_run_enemy_crit_attack()
+
+
+func _dev_run_enemy_crit_attack() -> void:
+	resolving_turn = true
+	if btn_attack:
+		btn_attack.disabled = true
+	var desc: String = await _enemy_attack_round_async(true)
+	combat_log(desc)
+	await get_tree().create_timer(0.1).timeout
+	if player.is_alive():
+		await set_turn(Turn.PLAYER)
+	resolving_turn = false
+	_show_toast("Enemy CRIT test", 1.0)
+
 
 func _dev_add_level() -> void:
 	_dev_add_levels(1)
@@ -4701,7 +5187,6 @@ func _dev_add_level() -> void:
 func _dev_add_levels(count: int) -> void:
 	for i in range(count):
 		player.add_xp(player.xp_to_next - player.xp)
-	_show_toast("+%d level(s)! Now LVL %d" % [count, player.level], 1.5)
 
 func _dev_set_forced_rarity(r: int, btn: Button) -> void:
 	_dev_forced_rarity = r

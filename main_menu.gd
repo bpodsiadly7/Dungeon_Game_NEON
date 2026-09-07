@@ -27,6 +27,8 @@ var _starting: bool = false
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	if SettingsUI:
+		SettingsUI.ensure_game_unblocked()
 	_wire_menu_button(_play_btn, _on_play_pressed)
 	_wire_menu_button(_settings_btn, _on_settings_pressed)
 	_wire_menu_button(_quit_btn, _on_quit_pressed)
@@ -36,7 +38,11 @@ func _ready() -> void:
 func _wire_menu_button(btn: TextureButton, pressed_cb: Callable) -> void:
 	if btn == null:
 		return
-	btn.pressed.connect(pressed_cb)
+	btn.pressed.connect(func() -> void:
+		if GameAudio:
+			GameAudio.play_menu_click()
+		pressed_cb.call()
+	)
 	btn.mouse_entered.connect(_on_menu_button_hover_in.bind(btn))
 	btn.mouse_exited.connect(_on_menu_button_hover_out.bind(btn))
 
@@ -209,7 +215,8 @@ func _on_play_pressed() -> void:
 
 
 func _on_settings_pressed() -> void:
-	push_warning("MainMenu: Settings — wkrótce.")
+	if SettingsUI:
+		SettingsUI.open_settings_from_menu()
 
 
 func _on_quit_pressed() -> void:

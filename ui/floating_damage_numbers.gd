@@ -21,7 +21,7 @@ static func spawn(
 		fx_root.visible = true
 
 	var style := _style_for(text, kind)
-	var start_pos := _screen_pos_for(target, cam, fx_root)
+	var start_pos := _screen_pos_for(target, cam, fx_root, kind)
 	var drift_x := randf_range(-style.drift, style.drift)
 	var rise := style.rise + randf_range(-10.0, 14.0)
 	var end_pos := start_pos + Vector2(drift_x, -rise)
@@ -116,6 +116,34 @@ static func _style_for(text: String, kind: String) -> _PopupStyle:
 		s.rise = 58.0
 		s.duration = 0.75
 		s.drift = 8.0
+		return s
+
+	if kind == "bleed":
+		s.font_size = 34
+		s.main_color = Color(0.92, 0.18, 0.14)
+		s.outline_color = Color(0.35, 0.02, 0.02)
+		s.outline_size = 8
+		s.glow_color = Color(0.75, 0.05, 0.05, 0.45)
+		s.pop_peak = 1.22
+		s.rise = 52.0
+		s.duration = 0.72
+		s.drift = 7.0
+		return s
+
+	if kind == "xp":
+		s.font_size = 32
+		s.main_color = Color(1.0, 0.92, 0.28)
+		s.outline_color = Color(0.35, 0.22, 0.02)
+		s.outline_size = 7
+		s.glow_color = Color(0.95, 0.75, 0.15, 0.55)
+		s.pop_peak = 1.28
+		s.rest_scale = 1.0
+		s.end_scale = 1.08
+		s.rise = 64.0
+		s.duration = 1.05
+		s.fade_from = 0.45
+		s.drift = 5.0
+		s.shake = 0.0
 		return s
 
 	if kind == "crit":
@@ -233,7 +261,7 @@ static func _measure_text(text: String, font: Font, font_size: int) -> Vector2:
 	return Vector2(float(text.length()) * float(font_size) * 0.52, float(font_size) * 1.15)
 
 
-static func _screen_pos_for(target: Node2D, _cam: Camera2D, fx_root: Control) -> Vector2:
+static func _screen_pos_for(target: Node2D, _cam: Camera2D, fx_root: Control, kind: String = "hit") -> Vector2:
 	var canvas_pt := target.get_global_transform_with_canvas().origin
 	if target is Sprite2D:
 		canvas_pt = (target as Sprite2D).get_global_transform_with_canvas().origin
@@ -243,7 +271,8 @@ static func _screen_pos_for(target: Node2D, _cam: Camera2D, fx_root: Control) ->
 			canvas_pt = spr.get_global_transform_with_canvas().origin
 
 	var local := fx_root.get_global_transform_with_canvas().affine_inverse() * canvas_pt
-	return local + Vector2(0, -36)
+	var head_lift := -88.0 if kind == "xp" else -36.0
+	return local + Vector2(0, head_lift)
 
 
 static func _parse_amount(text: String) -> int:
