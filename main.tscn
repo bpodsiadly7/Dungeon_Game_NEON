@@ -9,8 +9,8 @@
 [ext_resource type="Texture2D" uid="uid://ct8l8cggkpdhq" path="res://ui/hud_prototype.png" id="7_4c57u"]
 [ext_resource type="PackedScene" uid="uid://cnlssqpge8erk" path="res://addons/dice_roller/dice_roller/dice_roller.tscn" id="7_kek77"]
 [ext_resource type="Script" uid="uid://cohd4ovwrydr0" path="res://addons/dice_roller/dice_def.gd" id="8_4c57u"]
+[ext_resource type="Texture2D" uid="uid://cwobhtu3vg3cl" path="res://ui/UI_v3.png" id="9_dg77c"]
 [ext_resource type="Script" uid="uid://xsgh2gwr4gub" path="res://addons/dice_roller/dice_shape.gd" id="9_efxa6"]
-[ext_resource type="Texture2D" uid="uid://ccfph4n34lgh2" path="res://ikony/sword_icon.png" id="11_sword"]
 [ext_resource type="Texture2D" uid="uid://pa510soouvt5" path="res://ikony/ring_icon.png" id="12_ring"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_lquwl"]
@@ -21,13 +21,7 @@ corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 corner_detail = 20
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_7mycd"]
-bg_color = Color(0.18717611, 0.18717617, 0.18717602, 1)
-corner_radius_top_left = 8
-corner_radius_top_right = 8
-corner_radius_bottom_right = 8
-corner_radius_bottom_left = 8
-corner_detail = 6
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_attack_click"]
 
 [sub_resource type="ViewportTexture" id="ViewportTexture_kek77"]
 viewport_path = NodePath("DiceViewport")
@@ -50,7 +44,7 @@ position = Vector2(3, 3)
 
 [node name="Player" type="Sprite2D" parent="."]
 position = Vector2(-336, 40)
-scale = Vector2(0.4, 0.4)
+scale = Vector2(0.35, 0.35)
 texture = ExtResource("2_7mycd")
 script = ExtResource("2_h2yge")
 
@@ -60,7 +54,7 @@ script = ExtResource("3_h2yge")
 
 [node name="Sprite2D" type="Sprite2D" parent="Enemy"]
 position = Vector2(36, -4)
-scale = Vector2(0.4, 0.4)
+scale = Vector2(0.35, 0.35)
 
 [node name="CanvasLayer" type="CanvasLayer" parent="."]
 
@@ -69,8 +63,10 @@ layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_right = 128.0
-offset_bottom = 72.0
+offset_left = -20.0
+offset_top = -24.0
+offset_right = 108.0
+offset_bottom = 48.0
 grow_horizontal = 2
 grow_vertical = 2
 
@@ -307,7 +303,7 @@ offset_right = 20.0
 offset_bottom = -20.0
 grow_horizontal = 2
 grow_vertical = 0
-tooltip_text = "Zadaj atak ("
+mouse_filter = 2
 
 [node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UIRoot/Bottom"]
 layout_mode = 1
@@ -318,19 +314,21 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="CombatLog" type="Label" parent="CanvasLayer/UIRoot/Bottom/HBoxContainer"]
-visible = false
-custom_minimum_size = Vector2(300, 60)
+custom_minimum_size = Vector2(420, 78)
 layout_mode = 2
 size_flags_horizontal = 3
+vertical_alignment = 2
 autowrap_mode = 3
 
 [node name="PanelPotion" type="Control" parent="CanvasLayer/UIRoot"]
 layout_mode = 1
 anchors_preset = 0
 offset_left = 194.0
-offset_top = 563.0
+offset_top = 595.0
 offset_right = 254.0
-offset_bottom = 663.0
+offset_bottom = 695.0
+scale = Vector2(0.5, 0.5)
+pivot_offset = Vector2(57.595, 113.76)
 mouse_filter = 2
 
 [node name="BtnPotion" type="TextureButton" parent="CanvasLayer/UIRoot/PanelPotion"]
@@ -338,13 +336,13 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -47.46
-offset_top = -16.999973
-offset_right = 148.54001
-offset_bottom = 139.00003
+offset_left = -65.0
+offset_top = -32.0
+offset_right = 899.0
+offset_bottom = 892.0
 grow_horizontal = 2
 grow_vertical = 2
-scale = Vector2(0.6, 0.6)
+scale = Vector2(0.19, 0.19)
 focus_mode = 0
 texture_normal = ExtResource("6_7mycd")
 stretch_mode = 5
@@ -352,40 +350,195 @@ stretch_mode = 5
 [node name="PanelAttack" type="Control" parent="CanvasLayer/UIRoot"]
 layout_mode = 1
 anchors_preset = 0
-offset_left = 1000.0
-offset_top = 600.0
-offset_right = 1100.0002
-offset_bottom = 700.0
-mouse_filter = 2
+offset_left = 585.0
+offset_top = 627.0
+offset_right = 695.0
+offset_bottom = 737.0
 
-[node name="BtnAttack" type="TextureButton" parent="CanvasLayer/UIRoot/PanelAttack"]
+[node name="FrameArt" type="TextureRect" parent="CanvasLayer/UIRoot/PanelAttack"]
+visible = false
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-focus_mode = 0
-texture_normal = ExtResource("11_sword")
+mouse_filter = 2
+expand_mode = 1
 stretch_mode = 5
+
+[node name="AttackLayout" type="Control" parent="CanvasLayer/UIRoot/PanelAttack"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 58.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="HBox" type="HBoxContainer" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -58.0
+offset_top = -6.0
+offset_right = 6.0
+offset_bottom = 6.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 5
+
+[node name="ColBasic" type="Control" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+size_flags_stretch_ratio = 1.12
+
+[node name="HighlightBasic" type="ColorRect" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColBasic"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = -7.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0)
+
+[node name="BtnAttack" type="Button" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColBasic"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 5.0
+offset_top = 6.0
+offset_right = -5.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+tooltip_text = "Basic Attack (d20)"
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/pressed = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/hover = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/disabled = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_attack_click")
+flat = true
+
+[node name="ColRight" type="VBoxContainer" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 5
+
+[node name="SlotSafe" type="Control" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="HighlightSafe" type="ColorRect" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotSafe"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -3.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = -1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0)
+
+[node name="BtnSafeAttack" type="Button" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotSafe"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -3.0
+offset_top = 6.0
+offset_right = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+tooltip_text = "Safe Attack: d10 hit, d6 guard. Armor gained = d6 result (1–6) until your next turn."
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/pressed = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/hover = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/disabled = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_attack_click")
+flat = true
+
+[node name="SlotWild" type="Control" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="HighlightWild" type="ColorRect" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotWild"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -3.0
+offset_top = 2.0
+offset_right = -6.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 0)
+
+[node name="BtnWildAttack" type="Button" parent="CanvasLayer/UIRoot/PanelAttack/AttackLayout/HBox/ColRight/SlotWild"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -3.0
+offset_top = 2.0
+offset_right = -6.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+tooltip_text = "Wild Attack: d20 hit + d10 damage bonus. -1 Armor until your next turn."
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/pressed = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/hover = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/disabled = SubResource("StyleBoxEmpty_attack_click")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_attack_click")
+flat = true
 
 [node name="PanelActiveSkills" type="Control" parent="CanvasLayer/UIRoot"]
 layout_mode = 1
 anchors_preset = 0
-offset_left = 294.27
-offset_top = 640.0
-offset_right = 742.2687
-offset_bottom = 704.0
+offset_left = 284.0
+offset_top = 645.0
+offset_right = 583.0
+offset_bottom = 716.0
 mouse_filter = 2
 
 [node name="ActiveSkillsGrid" type="GridContainer" parent="CanvasLayer/UIRoot/PanelActiveSkills"]
+show_behind_parent = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 16.166656
+offset_top = 6.999976
+offset_right = 142.16666
+offset_bottom = -7.3332787
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/h_separation = 6
+scale = Vector2(0.6, 0.6)
+theme_override_constants/h_separation = 73
 theme_override_constants/v_separation = 6
 columns = 6
 
@@ -413,25 +566,50 @@ layout_mode = 2
 focus_mode = 0
 flat = true
 
-[node name="SkillSlot5" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
+[node name="ActiveSkillsGrid2" type="GridContainer" parent="CanvasLayer/UIRoot/PanelActiveSkills"]
+show_behind_parent = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 52.99999
+offset_top = 35.79998
+offset_right = 56.0
+offset_bottom = 16.79998
+grow_horizontal = 2
+grow_vertical = 2
+scale = Vector2(0.6, 0.6)
+theme_override_constants/h_separation = 73
+theme_override_constants/v_separation = 6
+columns = 6
+
+[node name="SkillSlot5" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid2"]
 custom_minimum_size = Vector2(52, 52)
 layout_mode = 2
 focus_mode = 0
 flat = true
 
-[node name="SkillSlot6" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid"]
+[node name="SkillSlot6" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid2"]
+custom_minimum_size = Vector2(52, 52)
+layout_mode = 2
+focus_mode = 0
+flat = true
+
+[node name="SkillSlot7" type="Button" parent="CanvasLayer/UIRoot/PanelActiveSkills/ActiveSkillsGrid2"]
 custom_minimum_size = Vector2(52, 52)
 layout_mode = 2
 focus_mode = 0
 flat = true
 
 [node name="PanelPassiveSkills" type="Control" parent="CanvasLayer/UIRoot"]
+show_behind_parent = true
 layout_mode = 1
 anchors_preset = 0
-offset_left = 740.0
-offset_top = 640.0
-offset_right = 939.0001
-offset_bottom = 699.99994
+offset_left = 731.0
+offset_top = 656.0
+offset_right = 1022.24994
+offset_bottom = 696.065
+scale = Vector2(0.8, 0.8)
 mouse_filter = 2
 
 [node name="PassiveSkillsGrid" type="GridContainer" parent="CanvasLayer/UIRoot/PanelPassiveSkills"]
@@ -439,9 +617,14 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = -3.7500794
+offset_top = -1.9674988
+offset_right = 73.43753
+offset_bottom = 1.9674988
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/h_separation = 4
+scale = Vector2(0.8, 0.8)
+theme_override_constants/h_separation = 65
 theme_override_constants/v_separation = 4
 columns = 8
 
@@ -486,111 +669,18 @@ initial_position = 1
 ok_button_text = "OK"
 
 [node name="FXRoot" type="Control" parent="CanvasLayer/UIRoot"]
-visible = false
+z_index = 200
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 21.0
+offset_top = 26.0
+offset_right = -104.0
+offset_bottom = -41.0
 grow_horizontal = 2
 grow_vertical = 2
-
-[node name="StatsPanel" type="PanelContainer" parent="CanvasLayer/UIRoot"]
-visible = false
-layout_mode = 1
-anchors_preset = 8
-anchor_left = 0.5
-anchor_top = 0.5
-anchor_right = 0.5
-anchor_bottom = 0.5
-offset_left = -20.0
-offset_top = -20.0
-offset_right = 20.0
-offset_bottom = 20.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_7mycd")
-
-[node name="VBoxContainer" type="VBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="LblStatsHeader" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-custom_minimum_size = Vector2(380, 28)
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "Stats"
-horizontal_alignment = 1
-
-[node name="HBoxContainer" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="LblStr" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "STR: 1"
-horizontal_alignment = 3
-
-[node name="BtnStrPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer"]
-layout_mode = 2
-size_flags_horizontal = 8
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "+"
-
-[node name="HBoxContainer2" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="LblAgi" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "AGI: 1"
-horizontal_alignment = 3
-
-[node name="BtnAgiPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer2"]
-layout_mode = 2
-size_flags_horizontal = 8
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "+"
-
-[node name="HBoxContainer3" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="LblVit" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "VIT: 1"
-horizontal_alignment = 3
-
-[node name="BtnVitPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer3"]
-layout_mode = 2
-size_flags_horizontal = 8
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "+"
-
-[node name="HBoxContainer4" type="HBoxContainer" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-
-[node name="LblCrit" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "CRIT: 1"
-horizontal_alignment = 3
-
-[node name="BtnCritPlus" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer/HBoxContainer4"]
-layout_mode = 2
-size_flags_horizontal = 8
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "+"
-
-[node name="LblPoints" type="Label" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "Unspent points: 0"
-horizontal_alignment = 1
-
-[node name="BtnClose" type="Button" parent="CanvasLayer/UIRoot/StatsPanel/VBoxContainer"]
-layout_mode = 2
-theme_override_fonts/font = ExtResource("5_lquwl")
-text = "Close"
+mouse_filter = 2
 
 [node name="DungeonChoiceDialog" type="ConfirmationDialog" parent="CanvasLayer/UIRoot"]
 title = "Dungeon Cleared!"
@@ -617,6 +707,12 @@ stretch_mode = 5
 show_behind_parent = true
 position = Vector2(642, 362)
 texture = ExtResource("7_4c57u")
+
+[node name="hud_bottom" type="Sprite2D" parent="CanvasLayer/UIRoot"]
+show_behind_parent = true
+position = Vector2(627.635, 400)
+scale = Vector2(0.35, 0.35)
+texture = ExtResource("9_dg77c")
 
 [node name="DiceViewport" type="SubViewport" parent="."]
 transparent_bg = true

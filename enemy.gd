@@ -8,6 +8,8 @@ var name_display: String = ""
 var max_hp: int = 0
 var hp: int = 0
 var damage: int = 0
+var difficulty: int = 1
+var is_treasure: bool = false
 
 var _spr: Sprite2D = null
 var _hit_flash_tween: Tween = null
@@ -34,11 +36,20 @@ func _kill_hit_flash() -> void:
 		_hit_flash_tween.kill()
 	_hit_flash_tween = null
 
-func setup_enemy(name_in: String, hp_in: int, dmg_in: int, tex_path: String = "") -> void:
+func setup_enemy(
+	name_in: String,
+	hp_in: int,
+	dmg_in: int,
+	tex_path: String = "",
+	difficulty_in: int = 1,
+	treasure_in: bool = false
+) -> void:
 	name_display = name_in
 	max_hp = hp_in
 	hp = max_hp
 	damage = dmg_in
+	difficulty = clampi(difficulty_in, 1, 5)
+	is_treasure = treasure_in
 
 	_kill_hit_flash()
 	if _spr:
@@ -62,9 +73,17 @@ func take_damage(amount: int) -> void:
 	hp = max(hp - amount, 0)
 	emit_signal("damaged", amount)
 	emit_signal("hp_changed", hp, max_hp)
-	play_hit_flash()  # 🔴 MIGANIE
+	play_hit_flash()
+	if amount > 0 and not is_treasure:
+		_play_hit_sound()
 	if hp == 0:
 		emit_signal("defeated")
+
+
+func _play_hit_sound() -> void:
+	var audio := get_node_or_null("/root/GameAudio")
+	if audio:
+		audio.play_enemy_hit(difficulty)
 
 func is_alive() -> bool:
 	return hp > 0

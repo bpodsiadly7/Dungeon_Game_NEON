@@ -6,6 +6,9 @@ const EQUIPMENT_SLOT_KEYS: Array[String] = [
 	"weapon", "armor", "helmet", "necklace", "gloves", "boots", "ring1", "ring2"
 ]
 
+const COLONY_STARTING_DWARFS := 1
+const COLONY_RECRUITS_PER_SUCCESS := 3
+
 func _empty_equipment_buckets() -> Dictionary:
 	var d := {}
 	for k in EQUIPMENT_SLOT_KEYS:
@@ -57,6 +60,154 @@ static func _deep_copy(v):
 
 func _enter_tree() -> void:
 	_ensure_save_equipment_shape()
+	_ensure_colony_shape()
+
+
+func _default_colony() -> Dictionary:
+	return {
+		"dwarf_count": COLONY_STARTING_DWARFS,
+		"pending_growth_from": -1,
+		"pending_loss_from": -1,
+	}
+
+
+func _ensure_colony_shape() -> void:
+	if not meta.has("colony") or typeof(meta["colony"]) != TYPE_DICTIONARY:
+		meta["colony"] = _default_colony()
+		return
+	var colony: Dictionary = meta["colony"]
+	if not colony.has("dwarf_count"):
+		colony["dwarf_count"] = COLONY_STARTING_DWARFS
+	if not colony.has("pending_growth_from"):
+		colony["pending_growth_from"] = -1
+	if not colony.has("pending_loss_from"):
+		colony["pending_loss_from"] = -1
+
+
+func get_dwarf_count() -> int:
+	_ensure_colony_shape()
+	return maxi(0, int(meta["colony"].get("dwarf_count", COLONY_STARTING_DWARFS)))
+
+
+func lose_dwarf_on_death() -> void:
+	_ensure_colony_shape()
+	var colony: Dictionary = meta["colony"]
+	var from_count := get_dwarf_count()
+	if from_count <= 0:
+		return
+	colony["pending_loss_from"] = from_count
+	colony["dwarf_count"] = from_count - 1
+	colony["pending_growth_from"] = -1
+
+
+func is_colony_defeated() -> bool:
+	return get_dwarf_count() <= 0
+
+
+func finalize_colony_defeat() -> void:
+	var slot := current_slot
+	delete_slot(slot)
+	reset_meta()
+	current_slot = slot
+
+
+func grant_colony_growth_on_success() -> void:
+	_ensure_colony_shape()
+	var from_count := get_dwarf_count()
+	meta["colony"]["pending_growth_from"] = from_count
+	meta["colony"]["pending_loss_from"] = -1
+	meta["colony"]["dwarf_count"] = from_count + COLONY_RECRUITS_PER_SUCCESS
+
+
+func consume_pending_loss_animation() -> Dictionary:
+	_ensure_colony_shape()
+	var colony: Dictionary = meta["colony"]
+	var from_count := int(colony.get("pending_loss_from", -1))
+	if from_count < 0:
+		return {}
+	colony["pending_loss_from"] = -1
+	return {
+		"from": from_count,
+		"to": get_dwarf_count(),
+	}
+
+
+func consume_pending_growth_animation() -> Dictionary:
+	_ensure_colony_shape()
+	var colony: Dictionary = meta["colony"]
+	var from_count := int(colony.get("pending_growth_from", -1))
+	if from_count < 0:
+		return {}
+	colony["pending_growth_from"] = -1
+	return {
+		"from": from_count,
+		"to": get_dwarf_count(),
+	}
+
+func duplicate_equipment_buckets(src: Dictionary) -> Dictionary:
+	var out := _empty_equipment_buckets()
+	for k in EQUIPMENT_SLOT_KEYS:
+		if not src.has(k):
+			continue
+		for it in src[k]:
+			if typeof(it) == TYPE_DICTIONARY:
+				out[k].append(_deep_copy(it))
+	return out
+
+
+func loadout_as_equipped_dict() -> Dictionary:
+	_ensure_save_equipment_shape()
+	var eq := {}
+	for k in EQUIPMENT_SLOT_KEYS:
+		var arr: Array = run["loadout"].get(k, [])
+		if arr.size() > 0 and typeof(arr[0]) == TYPE_DICTIONARY:
+			eq[k] = _deep_copy(arr[0])
+		else:
+			eq[k] = {}
+	return eq
+
+
+## Przed powrotem do bazy: zapisz aktualnie założony gear (np. po boss-upgrade) do run["loadout"].
+func sync_run_loadout_from_equipped(equipped: Dictionary) -> void:
+	_ensure_save_equipment_shape()
+	var loadout := _empty_equipment_buckets()
+	for slot in EQUIPMENT_SLOT_KEYS:
+		var it: Variant = equipped.get(slot, {})
+		if typeof(it) != TYPE_DICTIONARY or it.is_empty():
+			continue
+		if slot == "weapon" and String(it.get("name", "")) == "Unarmed":
+			continue
+		loadout[slot] = [_deep_copy(it)]
+	run["loadout"] = loadout
+
+
+func remove_item_from_bucket(bucket: Array, item: Dictionary) -> bool:
+	var target_name := String(item.get("name", ""))
+	for i in bucket.size():
+		if String(bucket[i].get("name", "")) == target_name:
+			bucket.remove_at(i)
+			return true
+	return false
+
+
+func remove_all_items_by_name_from_bucket(bucket: Array, item_name: String) -> int:
+	if item_name == "":
+		return 0
+	var removed := 0
+	for i in range(bucket.size() - 1, -1, -1):
+		if String(bucket[i].get("name", "")) == item_name:
+			bucket.remove_at(i)
+			removed += 1
+	return removed
+
+
+func _return_loadout_item_to_chest(slot: String, item: Dictionary) -> void:
+	var bucket: Array = meta["permanent_chest"][slot]
+	var item_name := String(item.get("name", ""))
+	# Zastąp stare kopie (np. sprzed boss-upgrade), zamiast dokładać duplikat.
+	remove_all_items_by_name_from_bucket(bucket, item_name)
+	bucket.append(_deep_copy(item))
+
 
 # Gracz wybiera w domu co bierze — kopiujemy do run["loadout"] (wszystkie sloty)
 func pack_loadout(selected: Dictionary) -> void:
@@ -73,22 +224,25 @@ func start_run(dungeon_name: String) -> void:
 	run["inventory"] = _empty_equipment_buckets()
 
 # Powrót do domu — loadout wraca do skrzynki, loot przepada
-func end_run_to_home() -> void:
+func end_run_to_home(grant_colony_growth: bool = false) -> void:
 	_ensure_save_equipment_shape()
 	for slot in EQUIPMENT_SLOT_KEYS:
 		var bucket: Array = run["loadout"].get(slot, [])
 		for it in bucket:
-			meta["permanent_chest"][slot].append(_deep_copy(it))
+			_return_loadout_item_to_chest(slot, it)
 	run["active"] = false
 	run["dungeon"] = ""
 	run["inventory"] = _empty_equipment_buckets()
 	run["loadout"] = _empty_equipment_buckets()
+	if grant_colony_growth:
+		grant_colony_growth_on_success()
 
-# Śmierć — traci wszystko: i loot, i loadout
+# Śmierć — traci wszystko: i loot, i loadout, i krasnoluda z wyprawy
 func on_player_death() -> void:
 	run["active"] = false
 	run["inventory"] = _empty_equipment_buckets()
 	run["loadout"] = _empty_equipment_buckets()
+	lose_dwarf_on_death()
 	# Reset poziomu gracza
 	meta["player"] = {
 		"level": 1, "xp": 0,
@@ -147,6 +301,7 @@ func load_game(slot: int) -> bool:
 	if data.has("meta"): meta = data["meta"]
 	if data.has("run"): run = data["run"]
 	_ensure_save_equipment_shape()
+	_ensure_colony_shape()
 	print("[SAVE] Loaded from slot %d" % slot)
 	return true
 
@@ -173,7 +328,8 @@ func reset_meta() -> void:
 		"last_class": "",
 		"visited_dungeons": [0],
 		"chosen_class": "",
-		"has_evolved": false
+		"has_evolved": false,
+		"colony": _default_colony(),
 	}
 	run = {
 		"active": false,

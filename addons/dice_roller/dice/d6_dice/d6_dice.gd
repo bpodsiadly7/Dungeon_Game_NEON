@@ -27,7 +27,11 @@ func _init():
 	}
 	super()
 
-func _ready():
-	#$DiceMesh.mesh.size = dice_size * Vector3.ONE
-	#collider.shape.size = dice_size * Vector3.ONE
-	super()
+
+func highlight() -> void:
+	# Bez siatkowego overlay (highlight_blur) — tylko sam korpus kostki.
+	pass
+
+
+func dehighlight() -> void:
+	highlight_face.visible = false

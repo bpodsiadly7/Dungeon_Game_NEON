@@ -25,14 +25,20 @@ const DUNGEON_ICONS := {
 }
 
 var _font: FontFile = null
-var _chest_panel: PanelContainer = null
 var _dungeon_panel: PanelContainer = null
 var _player_sprite: TextureRect = null
+var _dwarfs_label: Label = null
+var _ui_root: Control = null
+var _loadout_screen: Control = null
 
 func _ready() -> void:
 	if ResourceLoader.exists("res://MedievalSharp-Bold.ttf"):
 		_font = load("res://MedievalSharp-Bold.ttf")
+	if SettingsUI:
+		SettingsUI.ensure_game_unblocked()
 	_build_ui()
+	_setup_loadout_screen()
+	call_deferred("_on_home_ready_deferred")
 
 # ─────────────────────────────────────────────────────────────
 # BUDOWANIE UI
@@ -44,6 +50,22 @@ func _build_ui() -> void:
 	var root := Control.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	canvas.add_child(root)
+	_ui_root = root
+
+	var dwarfs_panel := _make_panel(Vector2(280, 56))
+	dwarfs_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	dwarfs_panel.offset_left = -140.0
+	dwarfs_panel.offset_right = 140.0
+	dwarfs_panel.offset_top = 16.0
+	dwarfs_panel.offset_bottom = 72.0
+	root.add_child(dwarfs_panel)
+
+	_dwarfs_label = _make_label("Dwarfs: 0", 26, Color(0.98, 0.88, 0.55))
+	_dwarfs_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_dwarfs_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_dwarfs_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dwarfs_panel.add_child(_dwarfs_label)
+	_refresh_dwarf_count_label()
 
 	# ── Lewy panel: postać ───────────────────────────────────
 	var left_panel := _make_panel(Vector2(260, 420))
@@ -121,105 +143,27 @@ func _build_ui() -> void:
 
 	right_vbox.add_child(_make_btn("▶  Start Run",      Color(0.95, 0.82, 0.30), _on_start_run))
 	right_vbox.add_child(_make_btn("🗺  Choose Dungeon", Color(0.55, 0.75, 1.0),  _on_open_dungeon))
-	right_vbox.add_child(_make_btn("📦  Open Chest",    Color(0.75, 0.55, 0.95), _on_open_chest))
+	right_vbox.add_child(_make_btn("📦  Loadout",       Color(0.75, 0.55, 0.95), _on_open_loadout))
 	right_vbox.add_child(_make_btn("💾  Save",          Color(0.45, 0.85, 0.50), _on_save))
 	right_vbox.add_child(_make_btn("🚪  Main Menu",     Color(0.6,  0.6,  0.6),  _on_main_menu))
 
 	# ── Panele overlay ──────────────────────────────────────
-	_build_chest_panel(root)
 	_build_dungeon_panel(root)
 
-# ─────────────────────────────────────────────────────────────
-# PANEL: CHEST
-# ─────────────────────────────────────────────────────────────
-func _build_chest_panel(root: Control) -> void:
-	_chest_panel = _make_panel(Vector2(500, 420))
-	_chest_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_chest_panel.offset_left   = -250
-	_chest_panel.offset_right  =  250
-	_chest_panel.offset_top    = -210
-	_chest_panel.offset_bottom =  210
-	_chest_panel.visible = false
-	_chest_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	root.add_child(_chest_panel)
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
-	_chest_panel.add_child(vbox)
-
-	var title := _make_label("📦  PERMANENT CHEST", 20, Color(0.95, 0.82, 0.30))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(title)
-	vbox.add_child(_make_hsep())
-
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vbox.add_child(scroll)
-
-	var list := VBoxContainer.new()
-	list.name = "ChestList"
-	list.add_theme_constant_override("separation", 6)
-	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(list)
-
-	vbox.add_child(_make_hsep())
-	vbox.add_child(_make_btn("Close", Color(0.7, 0.3, 0.25), func(): _chest_panel.visible = false))
-
-func _refresh_chest() -> void:
-	var list := _chest_panel.find_child("ChestList", true, false) as VBoxContainer
-	for c in list.get_children():
-		c.queue_free()
-
-	var chest: Dictionary = GameState.meta.get("permanent_chest", {})
-	var any := false
-	var rarity_colors := [
-		Color(1, 1, 1), Color(0.45, 0.75, 1), Color(0.75, 0.55, 0.95),
-		Color(1.0, 0.85, 0.2), Color(0.30, 1.00, 0.85),
-	]
-
-	for slot_key in GameState.EQUIPMENT_SLOT_KEYS:
-		var arr: Array = chest.get(slot_key, [])
-		for item in arr:
-			any = true
-			var row := HBoxContainer.new()
-			row.add_theme_constant_override("separation", 10)
-			row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-			var r: int = clamp(int(item.get("rarity", 0)), 0, rarity_colors.size() - 1)
-			var name_lbl := _make_label(
-				"%s  (%s)" % [str(item.get("name","?")), slot_key.capitalize()],
-				15, rarity_colors[r]
-			)
-			name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-			var captured_slot: String = slot_key
-			var captured_item: Dictionary = item.duplicate(true)
-			var take_btn := _make_btn("Take", Color(0.55, 0.90, 0.45), func():
-				_take_from_chest(captured_slot, captured_item)
-			)
-			take_btn.custom_minimum_size = Vector2(80, 32)
-
-			row.add_child(name_lbl)
-			row.add_child(take_btn)
-			list.add_child(row)
-
-	if not any:
-		var empty := _make_label("No permanent items yet.", 16, Color(0.55, 0.55, 0.55))
-		empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		list.add_child(empty)
-
-func _take_from_chest(slot_key: String, item: Dictionary) -> void:
-	var arr: Array = GameState.meta["permanent_chest"].get(slot_key, [])
-	for j in arr.size():
-		if arr[j].get("name","") == item.get("name",""):
-			arr.remove_at(j)
-			break
-	GameState.ensure_save_equipment_shape()
-	var copy := item.duplicate(true)
-	copy["permanent"] = true
-	GameState.run["loadout"][slot_key].append(copy)
-	_show_toast("Taken: %s" % str(item.get("name","?")))
-	_refresh_chest()
+func _setup_loadout_screen() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 20
+	add_child(layer)
+	var inv_scene := load("res://inventory_screen.tscn") as PackedScene
+	if inv_scene == null:
+		push_warning("HomeScene: brak inventory_screen.tscn")
+		return
+	_loadout_screen = inv_scene.instantiate()
+	layer.add_child(_loadout_screen)
+	_loadout_screen.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_loadout_screen.closed.connect(_on_loadout_closed)
+	if _loadout_screen.has_signal("loadout_changed"):
+		_loadout_screen.loadout_changed.connect(_on_loadout_changed)
 
 # ─────────────────────────────────────────────────────────────
 # PANEL: WYBÓR DUNGEONU
@@ -293,21 +237,89 @@ func _refresh_dungeons() -> void:
 		list.add_child(row)
 
 # ─────────────────────────────────────────────────────────────
+# KOLONIA
+# ─────────────────────────────────────────────────────────────
+func _on_home_ready_deferred() -> void:
+	_refresh_dwarf_count_label()
+
+	var loss: Dictionary = GameState.consume_pending_loss_animation()
+	if not loss.is_empty():
+		await _play_dwarf_count_animation(
+			int(loss.get("from", GameState.get_dwarf_count())),
+			int(loss.get("to", GameState.get_dwarf_count()))
+		)
+		_refresh_dwarf_count_label()
+		GameState.save(GameState.current_slot)
+
+	if GameState.is_colony_defeated():
+		await _show_colony_defeat()
+		return
+
+	var growth: Dictionary = GameState.consume_pending_growth_animation()
+	if growth.is_empty():
+		return
+	await _play_dwarf_count_animation(
+		int(growth.get("from", GameState.get_dwarf_count())),
+		int(growth.get("to", GameState.get_dwarf_count()))
+	)
+	_refresh_dwarf_count_label()
+	GameState.save(GameState.current_slot)
+
+
+func _refresh_dwarf_count_label() -> void:
+	if _dwarfs_label:
+		_dwarfs_label.text = "Dwarfs: %d" % GameState.get_dwarf_count()
+
+
+func _play_dwarf_count_animation(from_count: int, to_count: int) -> void:
+	var anim_script := load("res://ui/dwarf_colony_growth_anim.gd") as Script
+	if anim_script == null:
+		return
+	var layer: CanvasLayer = anim_script.new()
+	add_child(layer)
+	await layer.play(from_count, to_count)
+
+
+func _show_colony_defeat() -> void:
+	var script := load("res://ui/colony_defeat_overlay.gd") as Script
+	if script == null:
+		GameState.finalize_colony_defeat()
+		get_tree().change_scene_to_file(MENU_SCENE)
+		return
+	var overlay: CanvasLayer = script.new()
+	add_child(overlay)
+	await overlay.play()
+
+
+# ─────────────────────────────────────────────────────────────
 # AKCJE
 # ─────────────────────────────────────────────────────────────
 func _on_start_run() -> void:
+	if GameState.is_colony_defeated():
+		await _show_colony_defeat()
+		return
 	GameState.save(GameState.current_slot)
 	get_tree().change_scene_to_file(DUNGEON_SCENE)
 
-func _on_open_chest() -> void:
-	_refresh_chest()
-	_chest_panel.visible = true
+func _on_open_loadout() -> void:
 	_dungeon_panel.visible = false
+	if _loadout_screen and _loadout_screen.has_method("open_home_loadout"):
+		_loadout_screen.open_home_loadout()
+
+
+func _on_loadout_closed() -> void:
+	GameState.save(GameState.current_slot)
+
+
+func _on_loadout_changed() -> void:
+	GameState.save(GameState.current_slot)
+
 
 func _on_open_dungeon() -> void:
 	_refresh_dungeons()
 	_dungeon_panel.visible = true
-	_chest_panel.visible = false
+	if _loadout_screen and _loadout_screen.visible:
+		_loadout_screen._on_close()
 
 func _on_save() -> void:
 	var ok := GameState.save(GameState.current_slot)
@@ -316,6 +328,20 @@ func _on_save() -> void:
 func _on_main_menu() -> void:
 	GameState.save(GameState.current_slot)
 	get_tree().change_scene_to_file(MENU_SCENE)
+
+
+func _input(event: InputEvent) -> void:
+	if not event.is_action_pressed("ui_cancel"):
+		return
+	if SettingsUI == null:
+		return
+	if SettingsUI.is_settings_open():
+		SettingsUI.close_settings()
+		get_viewport().set_input_as_handled()
+		return
+	if not SettingsUI.is_pause_open():
+		SettingsUI.open_settings_from_menu()
+		get_viewport().set_input_as_handled()
 
 # ─────────────────────────────────────────────────────────────
 # HELPERS
